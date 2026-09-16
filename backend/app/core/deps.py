@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.core.security import decode_token
 from app.database import get_db
-from app.models.rbac import AuditLog, Permission
+from app.models.rbac import AuditLog, Permission, UserPermission
 from app.models.user import User
 
 
@@ -49,21 +49,23 @@ def get_current_user(
 
 
 def require_permission(module: str, action: str) -> Callable:
-    """يعتمد على وجود صلاحية module:action لدور المستخدم الحالي."""
+    """يتحقق من صلاحية module:action لدور المستخدم أو أذوناته الفردية."""
 
     def checker(current_user: User = Depends(get_current_user)) -> User:
         if current_user.is_superuser:
             return current_user
 
-        has = any(
-            p.module == module and p.action == action for p in (current_user.role.permissions or [])
+        role_perms = {f"{p.module}:{p.action}" for p in (current_user.role.permissions or [])}
+        user_perms = {
+            f"{p.module}:{p.action}" for p in (current_user.user_permissions or [])
+        }
+        if f"{module}:{action}" in role_perms or f"{module}:{action}" in user_perms:
+            return current_user
+
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"ليس لديك صلاحية {module}:{action}",
         )
-        if not has:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"ليس لديك صلاحية {module}:{action}",
-            )
-        return current_user
 
     return checker
 

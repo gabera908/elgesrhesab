@@ -12,7 +12,7 @@ from app.models.journal import (
 )
 from app.models.partner import PARTNER_TYPES, Partner
 from app.models.period import Company, Period
-from app.models.rbac import AuditLog, Permission, Role
+from app.models.rbac import AuditLog, Permission, Role, UserPermission
 from app.models.setting import Setting
 from app.models.user import User
 
@@ -37,6 +37,7 @@ __all__ = [
     "Company",
     "Permission",
     "Role",
+    "UserPermission",
     "AuditLog",
     "User",
     "Setting",

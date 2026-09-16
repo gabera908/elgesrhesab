@@ -12,6 +12,8 @@ from app.models.base import TimestampMixin
 if TYPE_CHECKING:
     from app.models.user import User
 
+PERMISSION_MODULES = ("accounts", "journals", "partners", "reports", "settings", "users")
+
 
 class Role(Base, TimestampMixin):
     __tablename__ = "roles"
@@ -44,6 +46,25 @@ class Permission(Base, TimestampMixin):
 
     def __repr__(self) -> str:
         return f"<Permission {self.module}:{self.action}>"
+
+
+class UserPermission(Base, TimestampMixin):
+    """صلاحية دقيقة (module:action) مرتبطة بمستخدم واحد — تُضاف فوق صلاحيات دوره."""
+
+    __tablename__ = "user_permissions"
+    __table_args__ = (UniqueConstraint("user_id", "module", "action"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    module: Mapped[str] = mapped_column(String(50), nullable=False)
+    action: Mapped[str] = mapped_column(String(30), nullable=False)
+
+    user: Mapped["User"] = relationship(back_populates="user_permissions")
+
+    def __repr__(self) -> str:
+        return f"<UserPermission {self.module}:{self.action}>"
 
 
 class AuditLog(Base):

@@ -11,7 +11,7 @@ from app.models.base import TimestampMixin
 
 if TYPE_CHECKING:
     from app.models.journal import JournalEntry
-    from app.models.rbac import Role
+    from app.models.rbac import Role, UserPermission
 
 
 class User(Base, TimestampMixin):
@@ -39,6 +39,9 @@ class User(Base, TimestampMixin):
     role_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("roles.id"), nullable=False)
 
     role: Mapped["Role"] = relationship(back_populates="users")
+    user_permissions: Mapped[List["UserPermission"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
     entries: Mapped[List["JournalEntry"]] = relationship(
         back_populates="created_by_user", foreign_keys="JournalEntry.created_by"
     )

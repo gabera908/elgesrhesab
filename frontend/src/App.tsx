@@ -16,6 +16,7 @@ import PartnersPage from "./pages/PartnersPage";
 import RegisterPage from "./pages/RegisterPage";
 import ReportsPage from "./pages/ReportsPage";
 import SettingsPage from "./pages/SettingsPage";
+import UsersPage from "./pages/UsersPage";
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, loading } = useAuth();
@@ -125,6 +126,16 @@ export default function App() {
           <ProtectedRoute>
             <MainLayout>
               <FiscalYearsPage />
+            </MainLayout>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/users"
+        element={
+          <ProtectedRoute>
+            <MainLayout>
+              <UsersPage />
             </MainLayout>
           </ProtectedRoute>
         }

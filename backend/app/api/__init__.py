@@ -16,6 +16,7 @@ from app.api.opening_balance import router as opening_balance_router
 from app.api.partners import router as partners_router
 from app.api.reports import router as reports_router
 from app.api.settings_api import router as settings_router
+from app.api.users_admin import router as users_admin_router
 
 api_router = APIRouter()
 api_router.include_router(auth_router)
@@ -33,3 +34,4 @@ api_router.include_router(income_router)
 api_router.include_router(cash_flow_router)
 api_router.include_router(american_router)
 api_router.include_router(settings_router)
+api_router.include_router(users_admin_router)

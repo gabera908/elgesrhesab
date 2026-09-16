@@ -8,6 +8,7 @@ import {
   Settings,
   TreePine,
   Users,
+  UserCog,
   FileSpreadsheet,
   TrendingUp,
   TrendingDown,
@@ -23,6 +24,7 @@ interface NavItem {
   label: string;
   icon: ReactNode;
   children?: NavItem[];
+  adminOnly?: boolean;
 }
 
 const navItems: NavItem[] = [
@@ -31,6 +33,7 @@ const navItems: NavItem[] = [
   { to: "/entries", label: "القيود اليومية", icon: <BookOpen className="w-4 h-4" /> },
   { to: "/partners", label: "الشركاء", icon: <Users className="w-4 h-4" /> },
   { to: "/fiscal", label: "السنوات والفترات", icon: <Calendar className="w-4 h-4" /> },
+  { to: "/users", label: "إدارة المستخدمين", icon: <UserCog className="w-4 h-4" />, adminOnly: true },
   {
     to: "/reports",
     label: "التقارير",
@@ -122,6 +125,11 @@ export default function MainLayout({ children }: { children: ReactNode }) {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
 
+  const canManageUsers =
+    user?.is_superuser || user?.role === "admin" || user?.role === "accountant";
+
+  const visibleNavItems = navItems.filter((item) => !item.adminOnly || canManageUsers);
+
   const handleLogout = () => {
     logout();
     navigate("/login");
@@ -143,7 +151,7 @@ export default function MainLayout({ children }: { children: ReactNode }) {
         </div>
 
         <nav className="p-3 space-y-1">
-          {navItems.map((item) => (
+          {visibleNavItems.map((item) => (
             <NavItemComponent key={item.to} item={item} />
           ))}
         </nav>
