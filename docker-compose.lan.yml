@@ -1,0 +1,8 @@
+# LAN override: replace nginx ports/volumes (Compose v5 merge uses !override; !reset nukes keys)
+services:
+  nginx:
+    ports: !override
+      - "8095:8095"
+    volumes: !override
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/lan.d:/etc/nginx/conf.d:ro
