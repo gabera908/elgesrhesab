@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { FileBarChart, FileSpreadsheet, BookOpen, BookText, Scale } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 
 import api from "../api/client";
 import { useReportFilterOptions, ProjectFilter } from "../hooks/useReportFilters";
@@ -35,6 +36,7 @@ interface TrialBalance {
 const fmt = (v: string | number) => Number(v).toFixed(2);
 
 export default function ReportsPage() {
+  const navigate = useNavigate();
   const today = new Date().toISOString().slice(0, 10);
   const [fromDate, setFromDate] = useState(today.slice(0, 8) + "01");
   const [toDate, setToDate] = useState(today);
@@ -60,30 +62,35 @@ export default function ReportsPage() {
       title: "ميزان المراجعة",
       desc: "أرصدة افتتاحية وحركة وأرصدة ختامية لكل حساب",
       icon: <Scale className="w-5 h-5" />,
+      to: "/reports",
     },
     {
       id: "general-ledger",
       title: "الأستاذ العام",
       desc: "كشف حركة كل حساب مع الرصيد الجاري",
       icon: <BookOpen className="w-5 h-5" />,
+      to: "/reports?report=general-ledger",
     },
     {
       id: "balance-sheet",
       title: "الميزانية العمومية",
       desc: "الأصول والخصوم وحقوق الملكية",
       icon: <FileBarChart className="w-5 h-5" />,
+      to: "/reports?report=balance-sheet",
     },
     {
       id: "journal",
       title: "اليومية الأمريكية",
       desc: "قيود اليومية بأعمدة مدين ودائن",
       icon: <FileSpreadsheet className="w-5 h-5" />,
+      to: "/reports/american-journal",
     },
     {
       id: "general-journal",
       title: "اليومية العامة",
       desc: "كل القيود بسطورها — الفترة والسنة المالية والمشروع والدفتر",
       icon: <BookText className="w-5 h-5" />,
+      to: "/reports/general-journal",
     },
   ];
 
@@ -99,13 +106,18 @@ export default function ReportsPage() {
       {/* بطاقات التقارير */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         {reports.map((r) => (
-          <div key={r.id} className="card p-5 hover:shadow-card transition-shadow cursor-pointer">
+          <button
+            key={r.id}
+            type="button"
+            onClick={() => navigate(r.to)}
+            className="card p-5 hover:shadow-card transition-shadow cursor-pointer text-right"
+          >
             <div className="w-10 h-10 rounded-lg bg-accent-soft flex items-center justify-center text-accent-dark mb-3">
               {r.icon}
             </div>
             <h3 className="font-bold text-ink mb-1">{r.title}</h3>
             <p className="text-xs text-ink-muted leading-relaxed">{r.desc}</p>
-          </div>
+          </button>
         ))}
       </div>
 
