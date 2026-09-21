@@ -1,6 +1,7 @@
-import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { ChevronLeft, ChevronDown, Plus, Search, TreePine } from "lucide-react";
+import { FormEvent, useMemo, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
+import { ChevronLeft, ChevronDown, Loader2, Plus, Search, TreePine, X } from "lucide-react";
 
 import api from "../api/client";
 
@@ -30,6 +31,27 @@ const TYPE_COLORS: Record<string, string> = {
   income: "bg-green-50 text-green-700",
   expense: "bg-red-50 text-red-700",
 };
+
+/** يسطّح الشجرة لقائمة الأباء المحتملة مع بادئة المستوى. */
+function flatten(nodes: AccountNode[], depth = 0): { node: AccountNode; depth: number }[] {
+  const out: { node: AccountNode; depth: number }[] = [];
+  for (const n of nodes) {
+    out.push({ node: n, depth });
+    out.push(...flatten(n.children, depth + 1));
+  }
+  return out;
+}
+
+/** يقترح الكود التالي: أكبر فرع داخل الأب + 1، أو أكبر جذر + 1 للمستوى الأول. */
+function suggestCode(parent: AccountNode | null, tree: AccountNode[]): string {
+  const siblings = parent ? parent.children : tree;
+  let max = 0;
+  for (const s of siblings) {
+    const seg = Number(s.code.split(".").pop());
+    if (!Number.isNaN(seg)) max = Math.max(max, seg);
+  }
+  return parent ? `${parent.code}.${max + 1}` : String(max + 1);
+}
 
 function AccountRow({ node, depth }: { node: AccountNode; depth: number }) {
   const [open, setOpen] = useState(depth < 2);
@@ -94,18 +116,84 @@ function AccountRow({ node, depth }: { node: AccountNode; depth: number }) {
 }
 
 export default function AccountsPage() {
+  const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
+  const [showForm, setShowForm] = useState(false);
+  const [parentId, setParentId] = useState("");
+  const [code, setCode] = useState("");
+  const [name, setName] = useState("");
+  const [accountType, setAccountType] = useState("asset");
+  const [isPostable, setIsPostable] = useState(true);
 
   const { data: tree = [], isLoading } = useQuery<AccountNode[]>({
     queryKey: ["accounts-tree"],
     queryFn: async () => (await api.get("/accounts/tree")).data,
   });
 
-  const filtered = search
-    ? tree.filter(
-        (a) => a.code.includes(search) || a.name.includes(search)
-      )
-    : tree;
+  const flat = useMemo(() => flatten(tree), [tree]);
+  const parentOptions = flat.filter((f) => f.node.level < 4);
+  const selectedParent = useMemo(
+    () => flat.find((f) => f.node.id === parentId)?.node ?? null,
+    [flat, parentId]
+  );
+
+  const createMutation = useMutation({
+    mutationFn: async (payload: Record<string, unknown>) => api.post("/accounts", payload),
+    onSuccess: () => {
+      toast.success("تم إنشاء الحساب");
+      queryClient.invalidateQueries({ queryKey: ["accounts-tree"] });
+      closeForm();
+    },
+    onError: (err: unknown) => {
+      const detail = (err as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail;
+      const msg = Array.isArray(detail)
+        ? detail.map((d: { msg?: string }) => d.msg).join("، ")
+        : (detail as string) ?? "فشل الإنشاء";
+      toast.error(msg);
+    },
+  });
+
+  const openForm = () => {
+    setShowForm(true);
+    setParentId("");
+    setCode(suggestCode(null, tree));
+    setName("");
+    setAccountType("asset");
+    setIsPostable(true);
+  };
+
+  const closeForm = () => setShowForm(false);
+
+  const onParentChange = (id: string) => {
+    setParentId(id);
+    const p = flat.find((f) => f.node.id === id)?.node ?? null;
+    setCode(suggestCode(p, tree));
+    if (p) setAccountType(p.account_type); // النوع يتبع الأب
+  };
+
+  const handleSubmit = (e: FormEvent) => {
+    e.preventDefault();
+    createMutation.mutate({
+      code: code.trim(),
+      name: name.trim(),
+      parent_id: parentId || null,
+      account_type: accountType,
+      is_postable: isPostable,
+    });
+  };
+
+  // بحث متكرر: تُبقى العقدة إذا طابقت هي أو أحد فروعها
+  const filterTree = (nodes: AccountNode[], q: string): AccountNode[] => {
+    const out: AccountNode[] = [];
+    for (const n of nodes) {
+      const kids = filterTree(n.children, q);
+      if (n.code.includes(q) || n.name.includes(q) || kids.length > 0) {
+        out.push({ ...n, children: kids.length > 0 ? kids : n.children });
+      }
+    }
+    return out;
+  };
+  const filtered = search.trim() ? filterTree(tree, search.trim()) : tree;
 
   return (
     <div className="space-y-6">
@@ -116,11 +204,109 @@ export default function AccountsPage() {
             الهيكل الهرمي للحسابات من المستوى الأول حتى الرابع
           </p>
         </div>
-        <button className="btn-primary">
+        <button onClick={openForm} className="btn-primary">
           <Plus className="w-4 h-4" />
           حساب جديد
         </button>
       </div>
+
+      {showForm && (
+        <form onSubmit={handleSubmit} className="card p-6 space-y-5">
+          <div className="flex items-center justify-between">
+            <h2 className="font-bold text-ink">إنشاء حساب جديد</h2>
+            <button type="button" onClick={closeForm} className="p-1.5 text-ink-muted hover:text-danger" title="إغلاق">
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="label" htmlFor="acc-parent">الحساب الأب (اختياري)</label>
+              <select
+                id="acc-parent"
+                className="input"
+                value={parentId}
+                onChange={(e) => onParentChange(e.target.value)}
+              >
+                <option value="">— حساب رئيسي (المستوى 1) —</option>
+                {parentOptions.map(({ node, depth }) => (
+                  <option key={node.id} value={node.id}>
+                    {"\u00A0".repeat(depth * 4)}
+                    {node.code} — {node.name}
+                  </option>
+                ))}
+              </select>
+              <p className="text-xs text-ink-muted mt-1">
+                المستوى يُحدَّد تلقائياً من الأب (بحد أقصى 4 مستويات)
+              </p>
+            </div>
+
+            <div>
+              <label className="label" htmlFor="acc-code">كود الحساب *</label>
+              <input
+                id="acc-code"
+                className="input tabular"
+                value={code}
+                onChange={(e) => setCode(e.target.value)}
+                required
+                dir="ltr"
+                placeholder={suggestCode(selectedParent, tree)}
+              />
+              <p className="text-xs text-ink-muted mt-1">مقترح تلقائياً — يمكنك تعديله</p>
+            </div>
+
+            <div className="md:col-span-2">
+              <label className="label" htmlFor="acc-name">اسم الحساب *</label>
+              <input
+                id="acc-name"
+                className="input"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                required
+                placeholder="مثال: الصندوق الرئيسي"
+              />
+            </div>
+
+            <div>
+              <label className="label" htmlFor="acc-type">النوع *</label>
+              <select
+                id="acc-type"
+                className="input"
+                value={accountType}
+                onChange={(e) => setAccountType(e.target.value)}
+                disabled={Boolean(selectedParent)}
+              >
+                {Object.entries(TYPE_LABELS).map(([v, l]) => (
+                  <option key={v} value={v}>{l}</option>
+                ))}
+              </select>
+              <p className="text-xs text-ink-muted mt-1">
+                {selectedParent
+                  ? `موروث من الأب (${TYPE_LABELS[selectedParent.account_type]}) — غير قابل للتغيير`
+                  : "يحدد موقع الحساب في القوائم المالية"}
+              </p>
+            </div>
+
+            <div>
+              <label className="label">قابل للترحيل</label>
+              <label className="flex items-center gap-2 text-sm cursor-pointer mt-1">
+                <input
+                  type="checkbox"
+                  checked={isPostable}
+                  onChange={(e) => setIsPostable(e.target.checked)}
+                  className="w-4 h-4 accent-[#D97757]"
+                />
+                يقبل القيود مباشرة (وإلا فهو حساب تجميعي)
+              </label>
+            </div>
+          </div>
+
+          <button type="submit" className="btn-primary" disabled={createMutation.isPending}>
+            {createMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+            إنشاء الحساب
+          </button>
+        </form>
+      )}
 
       <div className="card">
         <div className="p-4 border-b border-line">
