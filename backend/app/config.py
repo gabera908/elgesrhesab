@@ -1,6 +1,6 @@
 """إعدادات التطبيق — تُقرأ من متغيرات البيئة بمصادقة صارمة."""
 from functools import lru_cache
-from typing import List
+from typing import List, Optional
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -28,6 +28,10 @@ class Settings(BaseSettings):
     api_rate_limit_per_minute: int = 120
     twofa_issuer: str = "الجسر المصري للإعلام والتنمية"
     backup_encryption_passphrase: str = "default"
+
+    # كوكيز المصادقة: None = تلقائي (Secure فقط على HTTPS)
+    # اضبطها false عند التشغيل على HTTP داخل الشبكة المحلية، وtrue إجبارياً في الإنتاج العام.
+    cookie_secure: Optional[bool] = None
 
     # المؤسسة
     company_name: str = "الجسر المصري للإعلام والتنمية"

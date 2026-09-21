@@ -74,11 +74,23 @@ ACCESS_COOKIE_NAME = "access_token"
 REFRESH_COOKIE_NAME = "refresh_token"
 
 
-def _cookie_secure() -> bool:
-    return settings.environment == "production"
+def _cookie_secure(request=None) -> bool:
+    """يحدد علم Secure للكوكي.
+
+    الأولوية: إعداد COOKIE_SECURE الصريح، ثم الاستنتاج من مخطط الطلب
+    (HTTPS ⇒ Secure). مهم: تشغيل النظام على HTTP داخل الشبكة المحلية مع
+    Secure=true يجعل المتصفح يرفض الكوكي تماماً ⇒ حلقة 401/تجديد لا نهائية.
+    """
+    if settings.cookie_secure is not None:
+        return settings.cookie_secure
+    if request is None:
+        return settings.is_production
+    forwarded = (request.headers.get("x-forwarded-proto") or "").split(",")[0].strip()
+    scheme = forwarded or getattr(request.url, "scheme", "")
+    return scheme.lower() == "https"
 
 
-def set_auth_cookies(response, access_token: str, refresh_token: str) -> None:
+def set_auth_cookies(response, access_token: str, refresh_token: str, request=None) -> None:
     """يضبط توكنات المصادقة في كوكيز HttpOnly (لا تصل لها JS ⇒ محمية من XSS).
 
     نُبقي أيضاً إرجاع التوكن في JSON للتوافق مع العملاء القدامى، لكن الواجهة
@@ -86,7 +98,7 @@ def set_auth_cookies(response, access_token: str, refresh_token: str) -> None:
     """
     cookie_kwargs: dict[str, Any] = {
         "httponly": True,
-        "secure": _cookie_secure(),
+        "secure": _cookie_secure(request),
         "samesite": "lax",
         "path": "/",
     }

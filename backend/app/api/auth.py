@@ -1,5 +1,6 @@
 """تسجيل الدخول والتسجيل — مصادقة آمنة."""
 import secrets
+import uuid
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -160,7 +161,7 @@ async def login(
     role = user.role.name if user.role else "viewer"
     access_token = create_access_token(user.id, role)
     refresh_token = create_refresh_token(user.id)
-    set_auth_cookies(response, access_token, refresh_token)
+    set_auth_cookies(response, access_token, refresh_token, request)
     return TokenResponse(
         access_token=access_token,
         refresh_token=refresh_token,
@@ -184,14 +185,14 @@ async def refresh(
     if data is None or data.get("type") != "refresh":
         raise HTTPException(status_code=401, detail="رمز التحديث غير صالح")
 
-    user = db.get(User, data["sub"])
+    user = db.get(User, uuid.UUID(data["sub"]))
     if user is None or not user.is_active:
         raise HTTPException(status_code=401, detail="المستخدم غير موجود")
 
     role = user.role.name if user.role else "viewer"
     access_token = create_access_token(user.id, role)
     refresh_token = create_refresh_token(user.id)
-    set_auth_cookies(response, access_token, refresh_token)
+    set_auth_cookies(response, access_token, refresh_token, request)
     return TokenResponse(
         access_token=access_token,
         refresh_token=refresh_token,

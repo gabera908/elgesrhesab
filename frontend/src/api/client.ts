@@ -15,31 +15,50 @@ export const api: AxiosInstance = axios.create({
   withCredentials: true,
 });
 
-// تجديد تلقائي عند انتهاء صلاحية الكوكي
+// مسارات المصادقة مُستثناة من منطق التجديد — منعاً لحلقة تجديد لا نهائية:
+// فشل /auth/me على صفحة الدخول كان يُطلق refresh ثم redirect ثم reload متكرر.
+const AUTH_EXEMPT_PATHS = ["/auth/login", "/auth/refresh", "/auth/logout", "/auth/me"];
+
 let isRefreshing = false;
+let isRedirecting = false;
+
+const isAuthCall = (url?: string): boolean =>
+  Boolean(url) && AUTH_EXEMPT_PATHS.some((p) => (url as string).includes(p));
 
 api.interceptors.response.use(
   (response) => response,
   async (error) => {
     const originalRequest = error.config;
+    const status = error.response?.status;
 
-    if (error.response?.status === 401 && !originalRequest._retry && !isRefreshing) {
-      originalRequest._retry = true;
-      isRefreshing = true;
-
-      try {
-        // الكوكي يُرسل تلقائياً — لا body مطلوب
-        await axios.post(`${API_BASE_URL}/auth/refresh`, {}, { withCredentials: true });
-        return api(originalRequest);
-      } catch (refreshError) {
-        window.location.href = "/login";
-        return Promise.reject(refreshError);
-      } finally {
-        isRefreshing = false;
-      }
+    // لا تجديد ولا تحويل لمسارات المصادقة أو الطلبات غير 401
+    if (status !== 401 || !originalRequest || originalRequest._retry) {
+      return Promise.reject(error);
+    }
+    if (isAuthCall(originalRequest.url)) {
+      return Promise.reject(error);
+    }
+    if (isRefreshing) {
+      return Promise.reject(error);
     }
 
-    return Promise.reject(error);
+    originalRequest._retry = true;
+    isRefreshing = true;
+
+    try {
+      // الكوكي يُرسل تلقائياً — لا body مطلوب
+      await axios.post(`${API_BASE_URL}/auth/refresh`, {}, { withCredentials: true });
+      return api(originalRequest);
+    } catch (refreshError) {
+      // تحويل واحد فقط، وبدون تكرار لو نحن أصلاً على صفحة الدخول
+      if (!isRedirecting && !window.location.pathname.startsWith("/login")) {
+        isRedirecting = true;
+        window.location.href = "/login";
+      }
+      return Promise.reject(refreshError);
+    } finally {
+      isRefreshing = false;
+    }
   }
 );
 
@@ -59,3 +78,4 @@ export function clearTokens(): void {
 }
 
 export default api;
+
