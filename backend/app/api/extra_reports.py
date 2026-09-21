@@ -15,6 +15,7 @@ from app.models.account import Account, CostCenter
 from app.models.journal import JournalEntry, MoveLine
 from app.models.partner import Partner
 from app.models.user import User
+from app.api.report_filters import resolve_project_cost_center
 
 router = APIRouter(prefix="/api/reports/extra", tags=["تقارير إضافية"])
 
@@ -197,8 +198,8 @@ class IncomeComparison(BaseModel):
     profit_change: Decimal
 
 
-def _income_totals(db: Session, from_date: date, to_date: date) -> tuple[Decimal, Decimal]:
-    rows = db.execute(
+def _income_totals(db: Session, from_date: date, to_date: date, cc_id=None) -> tuple[Decimal, Decimal]:
+    stmt = (
         select(
             Account.account_type,
             func.coalesce(func.sum(MoveLine.debit), 0).label("d"),
@@ -209,8 +210,10 @@ def _income_totals(db: Session, from_date: date, to_date: date) -> tuple[Decimal
         .where(JournalEntry.state == "posted")
         .where(JournalEntry.entry_date.between(from_date, to_date))
         .where(Account.account_type.in_(("income", "expense")))
-        .group_by(Account.account_type)
-    ).all()
+    )
+    if cc_id is not None:
+        stmt = stmt.where(MoveLine.cost_center_id == cc_id)
+    rows = db.execute(stmt.group_by(Account.account_type)).all()
 
     rev = Decimal(0)
     exp = Decimal(0)
@@ -226,18 +229,20 @@ def _income_totals(db: Session, from_date: date, to_date: date) -> tuple[Decimal
 async def income_comparison(
     from_date: date = Query(...),
     to_date: date = Query(...),
+    project_id: Optional[uuid.UUID] = Query(None),
     current_user: User = Depends(require_permission("reports", "read")),
     db: Session = Depends(get_db),
 ):
-    """قائمة الدخل مع مقارنة بالفترة السابقة (نفس المدة)."""
+    """قائمة الدخل مع مقارنة بالفترة السابقة (نفس المدة) — يدعم فلتر المشروع."""
     from datetime import timedelta
 
+    cc_id = resolve_project_cost_center(db, project_id)
     duration = (to_date - from_date).days + 1
     prev_to = from_date - timedelta(days=1)
     prev_from = prev_to - timedelta(days=duration - 1)
 
-    cur_rev, cur_exp = _income_totals(db, from_date, to_date)
-    prev_rev, prev_exp = _income_totals(db, prev_from, prev_to)
+    cur_rev, cur_exp = _income_totals(db, from_date, to_date, cc_id)
+    prev_rev, prev_exp = _income_totals(db, prev_from, prev_to, cc_id)
 
     cur_profit = cur_rev - cur_exp
     prev_profit = prev_rev - prev_exp

@@ -8,6 +8,7 @@ import CashFlowPage from "./pages/CashFlowPage";
 import DashboardPage from "./pages/DashboardPage";
 import ExtraReportsPage from "./pages/ExtraReportsPage";
 import FiscalYearsPage from "./pages/FiscalYearsPage";
+import GeneralJournalPage from "./pages/GeneralJournalPage";
 import IncomeStatementPage from "./pages/IncomeStatementPage";
 import JournalEntriesPage from "./pages/JournalEntriesPage";
 import LoginPage from "./pages/LoginPage";
@@ -107,6 +108,16 @@ export default function App() {
           <ProtectedRoute>
             <MainLayout>
               <AmericanJournalPage />
+            </MainLayout>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/reports/general-journal"
+        element={
+          <ProtectedRoute>
+            <MainLayout>
+              <GeneralJournalPage />
             </MainLayout>
           </ProtectedRoute>
         }

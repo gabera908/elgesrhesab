@@ -1,7 +1,9 @@
 import { ReactNode, useState } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
 import {
+  BarChart3,
   BookOpen,
+  BookText,
   Briefcase,
   FileText,
   LayoutDashboard,
@@ -15,7 +17,6 @@ import {
   TrendingDown,
   Scale,
   Calendar,
-  BarChart3,
 } from "lucide-react";
 
 import { useAuth } from "../contexts/AuthContext";
@@ -44,6 +45,7 @@ const navItems: NavItem[] = [
       { to: "/reports/income-statement", label: "قائمة الدخل", icon: <TrendingUp className="w-3.5 h-3.5" /> },
       { to: "/reports/cash-flow", label: "التدفقات النقدية", icon: <TrendingDown className="w-3.5 h-3.5" /> },
       { to: "/reports/american-journal", label: "اليومية الأمريكية", icon: <FileSpreadsheet className="w-3.5 h-3.5" /> },
+      { to: "/reports/general-journal", label: "اليومية العامة", icon: <BookText className="w-3.5 h-3.5" /> },
       { to: "/reports", label: "ميزان المراجعة", icon: <Scale className="w-3.5 h-3.5" /> },
       { to: "/reports/extra", label: "تقارير إضافية", icon: <BarChart3 className="w-3.5 h-3.5" /> },
     ],

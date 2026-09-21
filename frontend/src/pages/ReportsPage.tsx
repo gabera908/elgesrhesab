@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { FileBarChart, FileSpreadsheet, BookOpen, Scale } from "lucide-react";
+import { FileBarChart, FileSpreadsheet, BookOpen, BookText, Scale } from "lucide-react";
 
 import api from "../api/client";
+import { useReportFilterOptions, ProjectFilter } from "../hooks/useReportFilters";
 
 interface TrialBalanceAccount {
   account_id: string;
@@ -37,12 +38,18 @@ export default function ReportsPage() {
   const today = new Date().toISOString().slice(0, 10);
   const [fromDate, setFromDate] = useState(today.slice(0, 8) + "01");
   const [toDate, setToDate] = useState(today);
+  const [projectId, setProjectId] = useState("");
+  const { projects } = useReportFilterOptions();
 
   const { data: trial, isLoading } = useQuery<TrialBalance>({
-    queryKey: ["trial-balance", fromDate, toDate],
+    queryKey: ["trial-balance", fromDate, toDate, projectId],
     queryFn: async () =>
       (await api.get("/reports/trial-balance", {
-        params: { from_date: fromDate, to_date: toDate },
+        params: {
+          from_date: fromDate,
+          to_date: toDate,
+          ...(projectId ? { project_id: projectId } : {}),
+        },
       })).data,
     enabled: Boolean(fromDate && toDate),
   });
@@ -71,6 +78,12 @@ export default function ReportsPage() {
       title: "اليومية الأمريكية",
       desc: "قيود اليومية بأعمدة مدين ودائن",
       icon: <FileSpreadsheet className="w-5 h-5" />,
+    },
+    {
+      id: "general-journal",
+      title: "اليومية العامة",
+      desc: "كل القيود بسطورها — الفترة والسنة المالية والمشروع والدفتر",
+      icon: <BookText className="w-5 h-5" />,
     },
   ];
 
@@ -114,6 +127,7 @@ export default function ReportsPage() {
               value={toDate}
               onChange={(e) => setToDate(e.target.value)}
             />
+            <ProjectFilter value={projectId} onChange={setProjectId} projects={projects} />
           </div>
           {trial && (
             <span

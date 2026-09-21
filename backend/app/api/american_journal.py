@@ -13,6 +13,7 @@ from app.core.deps import require_permission
 from app.database import get_db
 from app.models.account import Account
 from app.models.journal import JournalEntry, MoveLine
+from app.api.report_filters import resolve_project_cost_center
 
 router = APIRouter(prefix="/api/reports/american-journal", tags=["اليومية الأمريكية"])
 
@@ -49,13 +50,15 @@ async def american_journal(
     from_date: date = Query(...),
     to_date: date = Query(...),
     journal_id: Optional[uuid.UUID] = Query(None),
+    project_id: Optional[uuid.UUID] = Query(None),
     current_user: Account = Depends(require_permission("reports", "read")),
     db: Session = Depends(get_db),
 ):
-    """اليومية الأمريكية — تجميع القيود حسب اليوم مع المجاميع."""
+    """اليومية الأمريكية — تجميع القيود حسب اليوم مع المجاميع (يدعم فلتر المشروع)."""
     if from_date > to_date:
         raise HTTPException(status_code=422, detail="تاريخ البدء بعد تاريخ الانتهاء")
 
+    cc_id = resolve_project_cost_center(db, project_id)
     stmt = (
         select(MoveLine, JournalEntry, Account)
         .join(JournalEntry, JournalEntry.id == MoveLine.entry_id)
@@ -66,6 +69,8 @@ async def american_journal(
     )
     if journal_id is not None:
         stmt = stmt.where(JournalEntry.journal_id == journal_id)
+    if cc_id is not None:
+        stmt = stmt.where(MoveLine.cost_center_id == cc_id)
 
     rows = db.execute(stmt).all()
 

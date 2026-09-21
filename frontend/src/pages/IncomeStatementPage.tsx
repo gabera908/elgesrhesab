@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { TrendingUp, TrendingDown } from "lucide-react";
 
 import api from "../api/client";
+import { useReportFilterOptions, ProjectFilter } from "../hooks/useReportFilters";
 
 interface IncomeLine {
   account_code: string;
@@ -36,12 +37,18 @@ export default function IncomeStatementPage() {
   const today = new Date().toISOString().slice(0, 10);
   const [fromDate, setFromDate] = useState(today.slice(0, 8) + "01");
   const [toDate, setToDate] = useState(today);
+  const [projectId, setProjectId] = useState("");
+  const { projects } = useReportFilterOptions();
 
   const { data: stmt, isLoading } = useQuery<IncomeStatement>({
-    queryKey: ["income-statement", fromDate, toDate],
+    queryKey: ["income-statement", fromDate, toDate, projectId],
     queryFn: async () =>
       (await api.get("/reports/income-statement", {
-        params: { from_date: fromDate, to_date: toDate },
+        params: {
+          from_date: fromDate,
+          to_date: toDate,
+          ...(projectId ? { project_id: projectId } : {}),
+        },
       })).data,
     enabled: Boolean(fromDate && toDate),
   });
@@ -100,6 +107,7 @@ export default function IncomeStatementPage() {
           value={toDate}
           onChange={(e) => setToDate(e.target.value)}
         />
+        <ProjectFilter value={projectId} onChange={setProjectId} projects={projects} />
       </div>
 
       {isLoading ? (

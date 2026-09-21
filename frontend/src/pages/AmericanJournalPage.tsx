@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { FileSpreadsheet } from "lucide-react";
 
 import api from "../api/client";
+import { useReportFilterOptions, ProjectFilter } from "../hooks/useReportFilters";
 
 interface AmericanLine {
   entry_number: string;
@@ -36,12 +37,18 @@ export default function AmericanJournalPage() {
   const today = new Date().toISOString().slice(0, 10);
   const [fromDate, setFromDate] = useState(today.slice(0, 8) + "01");
   const [toDate, setToDate] = useState(today);
+  const [projectId, setProjectId] = useState("");
+  const { projects } = useReportFilterOptions();
 
   const { data: journal, isLoading } = useQuery<AmericanJournal>({
-    queryKey: ["american-journal", fromDate, toDate],
+    queryKey: ["american-journal", fromDate, toDate, projectId],
     queryFn: async () =>
       (await api.get("/reports/american-journal", {
-        params: { from_date: fromDate, to_date: toDate },
+        params: {
+          from_date: fromDate,
+          to_date: toDate,
+          ...(projectId ? { project_id: projectId } : {}),
+        },
       })).data,
     enabled: Boolean(fromDate && toDate),
   });
@@ -70,6 +77,7 @@ export default function AmericanJournalPage() {
           value={toDate}
           onChange={(e) => setToDate(e.target.value)}
         />
+        <ProjectFilter value={projectId} onChange={setProjectId} projects={projects} />
         {journal && (
           <span
             className={`mr-auto inline-flex px-3 py-1 rounded-lg text-sm font-medium ${

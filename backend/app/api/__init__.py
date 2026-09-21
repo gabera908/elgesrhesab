@@ -9,6 +9,7 @@ from app.api.cash_flow import router as cash_flow_router
 from app.api.export import router as export_router
 from app.api.extra_reports import router as extra_reports_router
 from app.api.fiscal import router as fiscal_router
+from app.api.general_journal import router as general_journal_router
 from app.api.income_statement import router as income_router
 from app.api.journal_entries import router as entries_router
 from app.api.journals_api import router as journals_router
@@ -35,5 +36,6 @@ api_router.include_router(reports_router)
 api_router.include_router(income_router)
 api_router.include_router(cash_flow_router)
 api_router.include_router(american_router)
+api_router.include_router(general_journal_router)
 api_router.include_router(settings_router)
 api_router.include_router(users_admin_router)

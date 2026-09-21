@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Calendar, Wallet } from "lucide-react";
 
 import api from "../api/client";
+import { useReportFilterOptions, ProjectFilter } from "../hooks/useReportFilters";
 
 interface FlowLine {
   account_code: string;
@@ -34,12 +35,18 @@ export default function CashFlowPage() {
   const today = new Date().toISOString().slice(0, 10);
   const [fromDate, setFromDate] = useState(today.slice(0, 8) + "01");
   const [toDate, setToDate] = useState(today);
+  const [projectId, setProjectId] = useState("");
+  const { projects } = useReportFilterOptions();
 
   const { data: flow, isLoading } = useQuery<CashFlow>({
-    queryKey: ["cash-flow", fromDate, toDate],
+    queryKey: ["cash-flow", fromDate, toDate, projectId],
     queryFn: async () =>
       (await api.get("/reports/cash-flow", {
-        params: { from_date: fromDate, to_date: toDate },
+        params: {
+          from_date: fromDate,
+          to_date: toDate,
+          ...(projectId ? { project_id: projectId } : {}),
+        },
       })).data,
     enabled: Boolean(fromDate && toDate),
   });
@@ -68,6 +75,7 @@ export default function CashFlowPage() {
           value={toDate}
           onChange={(e) => setToDate(e.target.value)}
         />
+        <ProjectFilter value={projectId} onChange={setProjectId} projects={projects} />
       </div>
 
       {isLoading ? (

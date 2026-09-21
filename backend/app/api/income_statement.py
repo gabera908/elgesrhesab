@@ -13,6 +13,7 @@ from app.core.deps import require_permission
 from app.database import get_db
 from app.models.account import Account
 from app.models.journal import JournalEntry, MoveLine
+from app.api.report_filters import resolve_project_cost_center
 
 router = APIRouter(prefix="/api/reports/income-statement", tags=["قائمة الدخل"])
 
@@ -48,14 +49,16 @@ class IncomeStatement(BaseModel):
 async def income_statement(
     from_date: date = Query(...),
     to_date: date = Query(...),
+    project_id: Optional[uuid.UUID] = Query(None),
     current_user: Account = Depends(require_permission("reports", "read")),
     db: Session = Depends(get_db),
 ):
-    """قائمة الدخل — كل الإيرادات والمصروفات في الفترة."""
+    """قائمة الدخل — كل الإيرادات والمصروفات في الفترة (يدعم فلتر المشروع)."""
     if from_date > to_date:
         raise HTTPException(status_code=422, detail="تاريخ البدء بعد تاريخ الانتهاء")
 
-    balances = db.execute(
+    cc_id = resolve_project_cost_center(db, project_id)
+    stmt = (
         select(
             MoveLine.account_id,
             func.coalesce(func.sum(MoveLine.debit), 0).label("d"),
@@ -64,8 +67,10 @@ async def income_statement(
         .join(JournalEntry, JournalEntry.id == MoveLine.entry_id)
         .where(JournalEntry.state == "posted")
         .where(JournalEntry.entry_date.between(from_date, to_date))
-        .group_by(MoveLine.account_id)
-    ).all()
+    )
+    if cc_id is not None:
+        stmt = stmt.where(MoveLine.cost_center_id == cc_id)
+    balances = db.execute(stmt.group_by(MoveLine.account_id)).all()
 
     bal = {r.account_id: (Decimal(r.d), Decimal(r.c)) for r in balances}
     accounts = {

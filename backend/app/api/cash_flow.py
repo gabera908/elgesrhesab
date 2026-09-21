@@ -13,6 +13,7 @@ from app.core.deps import require_permission
 from app.database import get_db
 from app.models.account import Account
 from app.models.journal import JournalEntry, MoveLine
+from app.api.report_filters import resolve_project_cost_center
 
 router = APIRouter(prefix="/api/reports/cash-flow", tags=["التدفقات النقدية"])
 
@@ -64,13 +65,15 @@ def _cash_accounts(db: Session) -> dict[uuid.UUID, Account]:
 async def cash_flow(
     from_date: date = Query(...),
     to_date: date = Query(...),
+    project_id: Optional[uuid.UUID] = Query(None),
     current_user: Account = Depends(require_permission("reports", "read")),
     db: Session = Depends(get_db),
 ):
-    """التدفقات النقدية — الحركة النقدية الواردة والصادرة."""
+    """التدفقات النقدية — الحركة النقدية الواردة والصادرة (يدعم فلتر المشروع)."""
     if from_date > to_date:
         raise HTTPException(status_code=422, detail="تاريخ البدء بعد تاريخ الانتهاء")
 
+    cc_id = resolve_project_cost_center(db, project_id)
     cash = _cash_accounts(db)
     if not cash:
         return CashFlowStatement(
@@ -83,7 +86,7 @@ async def cash_flow(
         )
 
     # الحركة خلال الفترة
-    period = db.execute(
+    period_stmt = (
         select(
             MoveLine.account_id,
             func.coalesce(func.sum(MoveLine.debit), 0).label("d"),
@@ -93,19 +96,22 @@ async def cash_flow(
         .where(JournalEntry.state == "posted")
         .where(JournalEntry.entry_date.between(from_date, to_date))
         .where(MoveLine.account_id.in_(list(cash.keys())))
-        .group_by(MoveLine.account_id)
-    ).all()
+    )
+    if cc_id is not None:
+        period_stmt = period_stmt.where(MoveLine.cost_center_id == cc_id)
+    period = db.execute(period_stmt.group_by(MoveLine.account_id)).all()
 
     # الرصيد الافتتاحي النقدي
-    opening = db.execute(
-        select(
-            func.coalesce(func.sum(MoveLine.debit - MoveLine.credit), 0)
-        )
+    opening_stmt = (
+        select(func.coalesce(func.sum(MoveLine.debit - MoveLine.credit), 0))
         .join(JournalEntry, JournalEntry.id == MoveLine.entry_id)
         .where(JournalEntry.state == "posted")
         .where(JournalEntry.entry_date < from_date)
         .where(MoveLine.account_id.in_(list(cash.keys())))
-    ).scalar_one()
+    )
+    if cc_id is not None:
+        opening_stmt = opening_stmt.where(MoveLine.cost_center_id == cc_id)
+    opening = db.execute(opening_stmt).scalar_one()
 
     lines: dict[str, List[FlowLine]] = {}
     for r in period:
