@@ -2,20 +2,26 @@
 import secrets
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, EmailStr, Field
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.core.deps import get_current_user
 from app.core.security import (
+    ACCESS_COOKIE_NAME,
+    REFRESH_COOKIE_NAME,
+    clear_auth_cookies,
     create_access_token,
     create_refresh_token,
     decode_token,
     generate_2fa_secret,
     hash_password,
     is_password_strong,
+    set_auth_cookies,
     verify_2fa_code,
     verify_password,
 )
@@ -25,9 +31,22 @@ from app.models.user import User
 
 router = APIRouter(prefix="/api/auth", tags=["المصادقة"])
 
+limiter = Limiter(key_func=get_remote_address)
+
 # قفل الحساب بعد 5 محاولات فاشلة
 MAX_FAILED_ATTEMPTS = 5
 LOCK_DURATION_MINUTES = 15
+LOGIN_RATE = f"{settings.login_rate_limit_per_minute}/minute"
+
+
+def _register_failed_attempt(user: User, db: Session) -> None:
+    """يسجّل محاولة فاشلة ويقفل الحساب عند تجاوز الحد."""
+    user.failed_login_attempts = (user.failed_login_attempts or 0) + 1
+    if user.failed_login_attempts >= MAX_FAILED_ATTEMPTS:
+        user.locked_until = datetime.now(timezone.utc) + timedelta(
+            minutes=LOCK_DURATION_MINUTES
+        )
+    db.commit()
 
 
 class RegisterRequest(BaseModel):
@@ -51,7 +70,7 @@ class TokenResponse(BaseModel):
 
 
 class RefreshRequest(BaseModel):
-    refresh_token: str
+    refresh_token: str | None = None
 
 
 class Enable2FARequest(BaseModel):
@@ -93,15 +112,26 @@ async def register(payload: RegisterRequest, db: Session = Depends(get_db)):
     return {"message": "تم التسجيل بنجاح", "is_admin": is_first}
 
 
+@limiter.limit(LOGIN_RATE)
 @router.post("/login")
-async def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)):
+async def login(
+    request: Request, response: Response, payload: LoginRequest, db: Session = Depends(get_db)
+):
     """تسجيل الدخول مع حماية من القوة الغاشمة و2FA."""
     user = db.scalar(select(User).where(User.username == payload.username))
 
     # رسالة موحَّدة لمنع كشف وجود الحساب
     invalid = HTTPException(status_code=401, detail="بيانات الاعتماد غير صحيحة")
 
+    # كلمة مرور خاطئة أو مستخدم غير موجود ⇒ سجّل محاولة عند وجود المستخدم
     if user is None or not verify_password(payload.password, user.password_hash):
+        if user is not None:
+            _register_failed_attempt(user, db)
+            if user.locked_until and user.locked_until > datetime.now(timezone.utc):
+                raise HTTPException(
+                    status_code=403,
+                    detail="الحساب مقفل مؤقتاً بسبب محاولات فاشلة",
+                )
         raise invalid
 
     if not user.is_active:
@@ -119,8 +149,7 @@ async def login(payload: LoginRequest, request: Request, db: Session = Depends(g
                 twofa_required=True,
             )
         if not user.twofa_secret or not verify_2fa_code(user.twofa_secret, payload.twofa_code):
-            user.failed_login_attempts += 1
-            db.commit()
+            _register_failed_attempt(user, db)
             raise HTTPException(status_code=401, detail="رمز التحقق غير صحيح")
 
     # إعادة تصفير المحاولات
@@ -129,16 +158,29 @@ async def login(payload: LoginRequest, request: Request, db: Session = Depends(g
     db.commit()
 
     role = user.role.name if user.role else "viewer"
+    access_token = create_access_token(user.id, role)
+    refresh_token = create_refresh_token(user.id)
+    set_auth_cookies(response, access_token, refresh_token)
     return TokenResponse(
-        access_token=create_access_token(user.id, role),
-        refresh_token=create_refresh_token(user.id),
+        access_token=access_token,
+        refresh_token=refresh_token,
     )
 
 
 @router.post("/refresh")
-async def refresh(payload: RefreshRequest, db: Session = Depends(get_db)):
-    """تجديد رمز الوصول عبر رمز التحديث."""
-    data = decode_token(payload.refresh_token)
+async def refresh(
+    request: Request,
+    response: Response,
+    payload: RefreshRequest | None = None,
+    db: Session = Depends(get_db),
+):
+    """تجديد رمز الوصول عبر رمز التحديث (كوكي HttpOnly أولاً ثم body للتوافق)."""
+    raw_token = request.cookies.get(REFRESH_COOKIE_NAME)
+    if not raw_token and payload is not None:
+        raw_token = payload.refresh_token
+    if not raw_token:
+        raise HTTPException(status_code=401, detail="رمز التحديث غير صالح")
+    data = decode_token(raw_token)
     if data is None or data.get("type") != "refresh":
         raise HTTPException(status_code=401, detail="رمز التحديث غير صالح")
 
@@ -147,10 +189,20 @@ async def refresh(payload: RefreshRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=401, detail="المستخدم غير موجود")
 
     role = user.role.name if user.role else "viewer"
+    access_token = create_access_token(user.id, role)
+    refresh_token = create_refresh_token(user.id)
+    set_auth_cookies(response, access_token, refresh_token)
     return TokenResponse(
-        access_token=create_access_token(user.id, role),
-        refresh_token=create_refresh_token(user.id),
+        access_token=access_token,
+        refresh_token=refresh_token,
     )
+
+
+@router.post("/logout")
+async def logout(response: Response, current_user: User = Depends(get_current_user)):
+    """تسجيل الخروج — يمسح كوكيز HttpOnly."""
+    clear_auth_cookies(response)
+    return {"message": "تم تسجيل الخروج"}
 
 
 @router.post("/2fa/enable")

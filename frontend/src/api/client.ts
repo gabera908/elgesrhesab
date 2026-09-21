@@ -2,23 +2,20 @@ import axios, { AxiosInstance } from "axios";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "/api";
 
-/** عميل HTTP مركزي — يدير الرموز والأخطاء. */
+/** عميل HTTP مركزي — المصادقة عبر كوكيز HttpOnly (لا تخزين في JS).
+ *
+ * الخادم يضبط `access_token/refresh_token` ككوكيز HttpOnly عند login/refresh،
+ * والمتصفح يرسلها تلقائياً مع `withCredentials`. لا يوجد أي توكن في
+ * localStorage ⇒ محمي من سرقة XSS.
+ */
 export const api: AxiosInstance = axios.create({
   baseURL: API_BASE_URL,
   headers: { "Content-Type": "application/json" },
   timeout: 30_000,
+  withCredentials: true,
 });
 
-// إرفاق رمز الوصول بكل طلب
-api.interceptors.request.use((config) => {
-  const token = localStorage.getItem("access_token");
-  if (token && config.headers) {
-    config.headers.Authorization = `Bearer ${token}`;
-  }
-  return config;
-});
-
-// تجديد تلقائي عند انتهاء صلاحية الرمز
+// تجديد تلقائي عند انتهاء صلاحية الكوكي
 let isRefreshing = false;
 
 api.interceptors.response.use(
@@ -27,24 +24,14 @@ api.interceptors.response.use(
     const originalRequest = error.config;
 
     if (error.response?.status === 401 && !originalRequest._retry && !isRefreshing) {
-      const refreshToken = localStorage.getItem("refresh_token");
-      if (!refreshToken) {
-        clearTokens();
-        return Promise.reject(error);
-      }
-
       originalRequest._retry = true;
       isRefreshing = true;
 
       try {
-        const { data } = await axios.post(`${API_BASE_URL}/auth/refresh`, {
-          refresh_token: refreshToken,
-        });
-        storeTokens(data.access_token, data.refresh_token);
-        originalRequest.headers.Authorization = `Bearer ${data.access_token}`;
+        // الكوكي يُرسل تلقائياً — لا body مطلوب
+        await axios.post(`${API_BASE_URL}/auth/refresh`, {}, { withCredentials: true });
         return api(originalRequest);
       } catch (refreshError) {
-        clearTokens();
         window.location.href = "/login";
         return Promise.reject(refreshError);
       } finally {
@@ -56,14 +43,19 @@ api.interceptors.response.use(
   }
 );
 
-export function storeTokens(access: string, refresh: string): void {
-  localStorage.setItem("access_token", access);
-  localStorage.setItem("refresh_token", refresh);
+/** توافق رجعي: دوال فارغة — لم يعد هناك توكن في التخزين المحلي. */
+export function storeTokens(_access: string, _refresh: string): void {
+  // قصداً لا شيء: الكوكيز تُدار من الخادم عبر Set-Cookie
 }
 
 export function clearTokens(): void {
-  localStorage.removeItem("access_token");
-  localStorage.removeItem("refresh_token");
+  // قصداً لا شيء محلياً: المسح يتم عبر POST /api/auth/logout
+  try {
+    localStorage.removeItem("access_token");
+    localStorage.removeItem("refresh_token");
+  } catch {
+    /* تجاهل */
+  }
 }
 
 export default api;

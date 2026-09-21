@@ -9,6 +9,7 @@ import {
 
 import api, { clearTokens, storeTokens } from "../api/client";
 
+/** تحقق الجلسة عبر الكوكي — لا توكن في JS إطلاقاً. */
 interface User {
   id: string;
   username: string;
@@ -43,17 +44,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   const refreshUser = useCallback(async () => {
-    const token = localStorage.getItem("access_token");
-    if (!token) {
-      setUser(null);
-      setLoading(false);
-      return;
-    }
+    // الجلسة تُتحقق عبر كوكي HttpOnly — أي 401 تعني غير مسجل
     try {
       const { data } = await api.get("/auth/me");
       setUser(data);
     } catch {
-      clearTokens();
       setUser(null);
     } finally {
       setLoading(false);
@@ -74,7 +69,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (data.twofa_required) {
         throw new Error("2FA_REQUIRED");
       }
-      storeTokens(data.access_token, data.refresh_token);
+      // الكوكيز ضُبطت من الخادم عبر Set-Cookie — لا تخزين محلي
+      storeTokens("", "");
       await refreshUser();
     },
     [refreshUser]
@@ -85,8 +81,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const logout = useCallback(() => {
-    clearTokens();
-    setUser(null);
+    // مسح الكوكيز من الخادم ثم تنظيف الحالة المحلية
+    api.post("/auth/logout").catch(() => undefined).finally(() => {
+      clearTokens();
+      setUser(null);
+    });
   }, []);
 
   const value: AuthContextValue = {

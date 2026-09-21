@@ -69,6 +69,47 @@ def decode_token(token: str) -> Optional[dict[str, Any]]:
         return None
 
 
+# ===== JWT عبر كوكيز HttpOnly =====
+ACCESS_COOKIE_NAME = "access_token"
+REFRESH_COOKIE_NAME = "refresh_token"
+
+
+def _cookie_secure() -> bool:
+    return settings.environment == "production"
+
+
+def set_auth_cookies(response, access_token: str, refresh_token: str) -> None:
+    """يضبط توكنات المصادقة في كوكيز HttpOnly (لا تصل لها JS ⇒ محمية من XSS).
+
+    نُبقي أيضاً إرجاع التوكن في JSON للتوافق مع العملاء القدامى، لكن الواجهة
+    الجديدة تعتمد على الكوكي فقط ولا تخزّن شيئاً في localStorage.
+    """
+    cookie_kwargs: dict[str, Any] = {
+        "httponly": True,
+        "secure": _cookie_secure(),
+        "samesite": "lax",
+        "path": "/",
+    }
+    response.set_cookie(
+        ACCESS_COOKIE_NAME,
+        access_token,
+        max_age=settings.jwt_access_expire_minutes * 60,
+        **cookie_kwargs,
+    )
+    response.set_cookie(
+        REFRESH_COOKIE_NAME,
+        refresh_token,
+        max_age=settings.jwt_refresh_expire_days * 24 * 3600,
+        **cookie_kwargs,
+    )
+
+
+def clear_auth_cookies(response) -> None:
+    """يمسح كوكيز المصادقة عند تسجيل الخروج."""
+    response.delete_cookie(ACCESS_COOKIE_NAME, path="/")
+    response.delete_cookie(REFRESH_COOKIE_NAME, path="/")
+
+
 # ===== المصادقة الثنائية (TOTP) =====
 def generate_2fa_secret() -> str:
     return pyotp.random_base32()

@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.core.security import decode_token
+from app.core.security import ACCESS_COOKIE_NAME
 from app.database import get_db
 from app.models.rbac import AuditLog, Permission, UserPermission
 from app.models.user import User
@@ -18,17 +19,19 @@ def get_current_user(
     db: Session = Depends(get_db),
     authorization: Optional[str] = Header(None),
 ) -> User:
-    """يستخرج المستخدم من رمز Bearer مع التحقق من الحالة."""
+    """يستخرج المستخدم من كوكي HttpOnly أولاً ثم Bearer للتوافق مع العملاء القدامى."""
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="بيانات الاعتماد غير صحيحة",
         headers={"WWW-Authenticate": "Bearer"},
     )
 
-    if not authorization or not authorization.startswith("Bearer "):
+    token: Optional[str] = request.cookies.get(ACCESS_COOKIE_NAME)
+    if not token and authorization and authorization.startswith("Bearer "):
+        token = authorization.removeprefix("Bearer ").strip()
+    if not token:
         raise credentials_exception
 
-    token = authorization.removeprefix("Bearer ").strip()
     payload = decode_token(token)
 
     if payload is None or payload.get("type") != "access":

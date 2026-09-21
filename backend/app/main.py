@@ -1,11 +1,14 @@
 """نقطة دخول تطبيق FastAPI — الجسر المصري للإعلام والتنمية."""
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from slowapi.errors import RateLimitExceeded
+from slowapi import _rate_limit_exceeded_handler
 
 from app.api import api_router
+from app.api.auth import limiter as auth_limiter
 from app.config import settings
 from app.database import Base, engine
 
@@ -26,6 +29,10 @@ app = FastAPI(
     openapi_url="/api/openapi.json" if not settings.is_production else None,
     lifespan=lifespan,
 )
+
+# Rate limiting — يعمل خلف Nginx عبر X-Forwarded-For
+app.state.limiter = auth_limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # CORS — أصول مسموحة فقط
 app.add_middleware(
