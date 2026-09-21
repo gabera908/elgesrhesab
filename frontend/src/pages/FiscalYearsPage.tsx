@@ -1,7 +1,7 @@
-import { useState } from "react";
+import { FormEvent, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Calendar, Lock, Unlock } from "lucide-react";
+import { Calendar, Loader2, Lock, Plus, Unlock, X } from "lucide-react";
 
 import api from "../api/client";
 
@@ -25,6 +25,10 @@ interface Period {
 export default function FiscalYearsPage() {
   const queryClient = useQueryClient();
   const [selectedYear, setSelectedYear] = useState<string>("");
+  const [showPeriodForm, setShowPeriodForm] = useState(false);
+  const [periodName, setPeriodName] = useState("");
+  const [periodFrom, setPeriodFrom] = useState("");
+  const [periodTo, setPeriodTo] = useState("");
 
   const { data: years = [], isLoading: yearsLoading } = useQuery<FiscalYear[]>({
     queryKey: ["fiscal-years"],
@@ -65,9 +69,42 @@ export default function FiscalYearsPage() {
     onSuccess: () => {
       toast.success("تم إقفال السنة المالية");
       queryClient.invalidateQueries({ queryKey: ["fiscal-years"] });
+      queryClient.invalidateQueries({ queryKey: ["periods"] });
     },
     onError: () => toast.error("فشل الإقفال"),
   });
+
+  const createPeriod = useMutation({
+    mutationFn: async (payload: Record<string, unknown>) =>
+      api.post("/fiscal/periods", payload),
+    onSuccess: () => {
+      toast.success("تم إنشاء الفترة");
+      queryClient.invalidateQueries({ queryKey: ["periods"] });
+      setShowPeriodForm(false);
+      setPeriodName("");
+      setPeriodFrom("");
+      setPeriodTo("");
+    },
+    onError: (err: unknown) => {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      toast.error(detail ?? "فشل إنشاء الفترة");
+    },
+  });
+
+  const submitPeriod = (e: FormEvent) => {
+    e.preventDefault();
+    const yearId = selectedYear || years[0]?.id;
+    if (!yearId) {
+      toast.error("أنشئ سنة مالية أولاً");
+      return;
+    }
+    createPeriod.mutate({
+      fiscal_year_id: yearId,
+      name: periodName,
+      start_date: periodFrom,
+      end_date: periodTo,
+    });
+  };
 
   const currentYear = years.find((y) => y.id === selectedYear) || years[0];
 
@@ -131,12 +168,49 @@ export default function FiscalYearsPage() {
 
         {/* الفترات */}
         <div className="card lg:col-span-2">
-          <div className="p-4 border-b border-line flex items-center gap-2">
+          <div className="p-4 border-b border-line flex items-center gap-2 flex-wrap">
             <Calendar className="w-4 h-4 text-ink-muted" />
             <h2 className="font-bold text-ink">
               فترات {currentYear?.name || ""}
             </h2>
+            {currentYear && !currentYear.is_closed && (
+              <button
+                onClick={() => setShowPeriodForm(!showPeriodForm)}
+                className="btn-secondary mr-auto text-sm"
+              >
+                {showPeriodForm ? <X className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
+                {showPeriodForm ? "إلغاء" : "فترة جديدة"}
+              </button>
+            )}
           </div>
+
+          {showPeriodForm && currentYear && (
+            <form onSubmit={submitPeriod} className="p-4 border-b border-line bg-line-soft/40 grid grid-cols-1 md:grid-cols-4 gap-3 items-end">
+              <div>
+                <label className="label" htmlFor="p-name">اسم الفترة</label>
+                <input id="p-name" className="input" value={periodName}
+                  onChange={(e) => setPeriodName(e.target.value)} required
+                  placeholder="مثال: يناير 2026" />
+              </div>
+              <div>
+                <label className="label" htmlFor="p-from">من</label>
+                <input id="p-from" type="date" className="input" value={periodFrom}
+                  onChange={(e) => setPeriodFrom(e.target.value)} required
+                  min={currentYear.start_date} max={currentYear.end_date} />
+              </div>
+              <div>
+                <label className="label" htmlFor="p-to">إلى</label>
+                <input id="p-to" type="date" className="input" value={periodTo}
+                  onChange={(e) => setPeriodTo(e.target.value)} required
+                  min={currentYear.start_date} max={currentYear.end_date} />
+              </div>
+              <button type="submit" className="btn-primary" disabled={createPeriod.isPending}>
+                {createPeriod.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+                إنشاء الفترة
+              </button>
+            </form>
+          )}
+
           {periods.length === 0 ? (
             <div className="p-12 text-center text-ink-muted">لا توجد فترات</div>
           ) : (

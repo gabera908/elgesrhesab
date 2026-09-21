@@ -102,6 +102,13 @@ async def close_year(
 
 
 # ===== الفترات =====
+class PeriodCreate(BaseModel):
+    fiscal_year_id: uuid.UUID
+    name: str = Field(..., min_length=1, max_length=100)
+    start_date: date
+    end_date: date
+
+
 class PeriodOut(BaseModel):
     id: uuid.UUID
     fiscal_year_id: uuid.UUID
@@ -124,6 +131,41 @@ async def list_periods(
     if year_id:
         stmt = stmt.where(Period.fiscal_year_id == year_id)
     return db.scalars(stmt).all()
+
+
+@router.post("/periods", response_model=PeriodOut, status_code=201)
+async def create_period(
+    payload: PeriodCreate,
+    current_user: User = Depends(require_permission("settings", "update")),
+    db: Session = Depends(get_db),
+):
+    """إنشاء فترة مالية يدوياً داخل سنة موجودة (مثال: فترة إقفال إضافية أو فترة معدلة)."""
+    year = db.get(FiscalYear, payload.fiscal_year_id)
+    if year is None:
+        raise HTTPException(status_code=404, detail="السنة المالية غير موجودة")
+    if year.is_closed:
+        raise HTTPException(status_code=400, detail="لا يمكن إضافة فترة لسنة مقفلة")
+    if payload.start_date > payload.end_date:
+        raise HTTPException(status_code=422, detail="تاريخ البداية بعد النهاية")
+    if payload.start_date < year.start_date or payload.end_date > year.end_date:
+        raise HTTPException(
+            status_code=422,
+            detail=f"الفترة يجب أن تكون داخل السنة {year.name} ({year.start_date} — {year.end_date})",
+        )
+    overlap = db.scalar(
+        select(Period)
+        .where(Period.fiscal_year_id == payload.fiscal_year_id)
+        .where(Period.start_date <= payload.end_date)
+        .where(Period.end_date >= payload.start_date)
+        .limit(1)
+    )
+    if overlap is not None:
+        raise HTTPException(status_code=409, detail=f"تتداخل مع فترة موجودة: {overlap.name}")
+    period = Period(**payload.model_dump())
+    db.add(period)
+    db.commit()
+    db.refresh(period)
+    return period
 
 
 @router.post("/periods/{period_id}/close")
