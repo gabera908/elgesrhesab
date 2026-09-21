@@ -144,7 +144,10 @@ async def export_trial_balance_excel(
         cell.border = border
 
     for col in ws.columns:
-        ws.column_dimensions[col[0].column_letter].width = 18
+        # تخطَّ خلايا الدماج (MergedCell بلا column_letter)
+        letter = col[0].column_letter if hasattr(col[0], "column_letter") else None
+        if letter:
+            ws.column_dimensions[letter].width = 18
     ws.column_dimensions["B"].width = 35
 
     buffer = io.BytesIO()
