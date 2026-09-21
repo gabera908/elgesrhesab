@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_user, require_permission
 from app.database import get_db
-from app.models.account import ACCOUNT_TYPES, Account
+from app.models.account import ACCOUNT_TYPES, Account, CostCenter
 
 router = APIRouter(prefix="/api/accounts", tags=["شجرة الحسابات"])
 
@@ -170,3 +170,26 @@ async def deactivate_account(
     account.is_active = False
     db.commit()
     return {"message": "تم تعطيل الحساب"}
+
+class CostCenterOut(BaseModel):
+    id: uuid.UUID
+    code: str
+    name: str
+    is_active: bool
+
+    class Config:
+        from_attributes = True
+
+
+@router.get("/cost-centers", response_model=List[CostCenterOut])
+async def list_cost_centers(
+    current_user: Account = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    active_only: bool = True,
+):
+    """قائمة مراكز التكلفة — تُستخدم في المشاريع والقيود."""
+    stmt = select(CostCenter).order_by(CostCenter.code)
+    if active_only:
+        stmt = stmt.where(CostCenter.is_active == True)  # noqa: E712
+    return db.scalars(stmt).all()
+

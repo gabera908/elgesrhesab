@@ -14,6 +14,7 @@ from app.api.journal_entries import router as entries_router
 from app.api.journals_api import router as journals_router
 from app.api.opening_balance import router as opening_balance_router
 from app.api.partners import router as partners_router
+from app.api.projects import router as projects_router
 from app.api.reports import router as reports_router
 from app.api.settings_api import router as settings_router
 from app.api.users_admin import router as users_admin_router
@@ -25,6 +26,7 @@ api_router.include_router(entries_router)
 api_router.include_router(journals_router)
 api_router.include_router(opening_balance_router)
 api_router.include_router(partners_router)
+api_router.include_router(projects_router)
 api_router.include_router(fiscal_router)
 api_router.include_router(attachments_router)
 api_router.include_router(export_router)

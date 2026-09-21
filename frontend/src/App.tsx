@@ -13,6 +13,7 @@ import JournalEntriesPage from "./pages/JournalEntriesPage";
 import LoginPage from "./pages/LoginPage";
 import OpeningBalancePage from "./pages/OpeningBalancePage";
 import PartnersPage from "./pages/PartnersPage";
+import ProjectsPage from "./pages/ProjectsPage";
 import RegisterPage from "./pages/RegisterPage";
 import ReportsPage from "./pages/ReportsPage";
 import SettingsPage from "./pages/SettingsPage";
@@ -116,6 +117,16 @@ export default function App() {
           <ProtectedRoute>
             <MainLayout>
               <PartnersPage />
+            </MainLayout>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/projects"
+        element={
+          <ProtectedRoute>
+            <MainLayout>
+              <ProjectsPage />
             </MainLayout>
           </ProtectedRoute>
         }

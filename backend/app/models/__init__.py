@@ -12,6 +12,7 @@ from app.models.journal import (
 )
 from app.models.partner import PARTNER_TYPES, Partner
 from app.models.period import Company, Period
+from app.models.project import PROJECT_STATUSES, Project
 from app.models.rbac import AuditLog, Permission, Role, UserPermission
 from app.models.setting import Setting
 from app.models.user import User
@@ -33,6 +34,8 @@ __all__ = [
     "MoveLine",
     "Partner",
     "PARTNER_TYPES",
+    "Project",
+    "PROJECT_STATUSES",
     "Period",
     "Company",
     "Permission",

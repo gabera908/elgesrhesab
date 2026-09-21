@@ -2,6 +2,7 @@ import { ReactNode, useState } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
 import {
   BookOpen,
+  Briefcase,
   FileText,
   LayoutDashboard,
   LogOut,
@@ -32,6 +33,7 @@ const navItems: NavItem[] = [
   { to: "/accounts", label: "شجرة الحسابات", icon: <TreePine className="w-4 h-4" /> },
   { to: "/entries", label: "القيود اليومية", icon: <BookOpen className="w-4 h-4" /> },
   { to: "/partners", label: "الشركاء", icon: <Users className="w-4 h-4" /> },
+  { to: "/projects", label: "المشاريع", icon: <Briefcase className="w-4 h-4" /> },
   { to: "/fiscal", label: "السنوات والفترات", icon: <Calendar className="w-4 h-4" /> },
   { to: "/users", label: "إدارة المستخدمين", icon: <UserCog className="w-4 h-4" />, adminOnly: true },
   {

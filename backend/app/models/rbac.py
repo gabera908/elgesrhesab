@@ -12,7 +12,7 @@ from app.models.base import TimestampMixin
 if TYPE_CHECKING:
     from app.models.user import User
 
-PERMISSION_MODULES = ("accounts", "journals", "partners", "reports", "settings", "users")
+PERMISSION_MODULES = ("accounts", "journals", "partners", "projects", "reports", "settings", "users")
 
 
 class Role(Base, TimestampMixin):
