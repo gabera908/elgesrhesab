@@ -171,6 +171,11 @@ async def deactivate_account(
     db.commit()
     return {"message": "تم تعطيل الحساب"}
 
+class CostCenterCreate(BaseModel):
+    code: str = Field(..., min_length=1, max_length=30)
+    name: str = Field(..., min_length=1, max_length=200)
+
+
 class CostCenterOut(BaseModel):
     id: uuid.UUID
     code: str
@@ -187,9 +192,25 @@ async def list_cost_centers(
     db: Session = Depends(get_db),
     active_only: bool = True,
 ):
-    """قائمة مراكز التكلفة — تُستخدم في المشاريع والقيود."""
+    """قائمة مراكز التكلفة — تُستخدم في المشاريع والقيود (قراءة فقط)."""
     stmt = select(CostCenter).order_by(CostCenter.code)
     if active_only:
         stmt = stmt.where(CostCenter.is_active == True)  # noqa: E712
     return db.scalars(stmt).all()
+
+
+@router.post("/cost-centers", response_model=CostCenterOut, status_code=status.HTTP_201_CREATED)
+async def create_cost_center(
+    payload: CostCenterCreate,
+    current_user: Account = Depends(require_permission("accounts", "create")),
+    db: Session = Depends(get_db),
+):
+    """إنشاء مركز تكلفة — نواة ربط المشاريع بالحركة المحاسبية."""
+    if db.scalar(select(CostCenter).where(CostCenter.code == payload.code)):
+        raise HTTPException(status_code=409, detail="كود مركز التكلفة موجود مسبقاً")
+    cc = CostCenter(code=payload.code, name=payload.name)
+    db.add(cc)
+    db.commit()
+    db.refresh(cc)
+    return cc
 
