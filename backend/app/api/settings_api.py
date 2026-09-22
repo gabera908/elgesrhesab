@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.core.deps import get_current_user, require_permission
-from app.database import get_db
+from app.database import Base, get_db
 from app.models.account import Account
 from app.models.journal import Journal, JournalEntry, MoveLine
 from app.models.setting import Setting
@@ -194,6 +194,26 @@ def _encrypt_file(src: str, dest: str) -> None:
         f.write(b"XOR1" + bytes(b ^ key[i % len(key)] for i, b in enumerate(raw)))
 
 
+def _sql_literal(value) -> str:
+    """تحويل قيمة بايثون إلى لفظ SQL آمن لملف النسخة."""
+    import datetime as _dt
+
+    if value is None:
+        return "NULL"
+    if isinstance(value, bool):
+        return "TRUE" if value else "FALSE"
+    if isinstance(value, (int, float, Decimal)):
+        return str(value)
+    if isinstance(value, (_dt.datetime, _dt.date)):
+        return f"'{value.isoformat()}'"
+    if isinstance(value, uuid.UUID):
+        return f"'{value}'"
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return f"'\\x{bytes(value).hex()}'"
+    s = str(value).replace("'", "''")
+    return f"'{s}'"
+
+
 def _sqlite_file() -> Optional[str]:
     url = settings.database_url or ""
     if not url.lower().startswith("sqlite"):
@@ -214,7 +234,7 @@ async def create_backup(
     current_user: User = Depends(require_permission("settings", "update")),
     db: Session = Depends(get_db),
 ):
-    """إنشاء نسخة احتياطية مشفَّرة — SQLite عبر تفريغ داخلي، وPostgres عبر pg_dump."""
+    """إنشاء نسخة احتياطية مشفَّرة — تفريغ SQL بايثون خالص (يعمل على أي حاوية)."""
     backup_dir = _get_backup_dir()
     stamp = date.today().isoformat()
     filepath = os.path.join(backup_dir, f"backup-{stamp}.sql")
@@ -235,19 +255,19 @@ async def create_backup(
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(status_code=500, detail=f"فشل تفريغ قاعدة البيانات: {exc}")
     else:
-        env = {**os.environ, "PGPASSWORD": os.environ.get("POSTGRES_PASSWORD", "")}
+        # PostgreSQL: تفريغ بايثون خالص عبر SQLAlchemy — لا يحتاج pg_dump
         try:
-            result = subprocess.run(
-                ["pg_dump", "-h", os.environ.get("POSTGRES_HOST", "db"),
-                 "-U", os.environ.get("POSTGRES_USER", "bridge_accounting"),
-                 "-d", os.environ.get("POSTGRES_DB", "accounting"),
-                 "-f", filepath],
-                capture_output=True, text=True, env=env, timeout=300,
-            )
-        except FileNotFoundError:
-            raise HTTPException(status_code=500, detail="أداة pg_dump غير متوفرة على الخادم")
-        if result.returncode != 0:
-            raise HTTPException(status_code=500, detail=f"فشل النسخ: {(result.stderr or '')[:300]}")
+            with open(filepath, "w", encoding="utf-8") as f:
+                f.write(f"-- Backup {stamp}\n")
+                for table in reversed(Base.metadata.sorted_tables):
+                    rows = db.execute(table.select()).mappings().all()
+                    cols = [c.name for c in table.columns]
+                    f.write(f"-- table {table.name}: {len(rows)} rows\n")
+                    for row in rows:
+                        vals = ", ".join(_sql_literal(row[c]) for c in cols)
+                        f.write(f"INSERT INTO {table.name} ({', '.join(cols)}) VALUES ({vals});\n")
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=500, detail=f"فشل تفريغ قاعدة البيانات: {exc}")
 
     enc_path = filepath + ".enc"
     try:
@@ -316,18 +336,22 @@ async def reset_accounts(
     if payload.confirmation != "RESET":
         raise HTTPException(status_code=422, detail="تأكيد غير صحيح")
 
-    # أرشفة الحركة قبل التصفير
+    # أرشفة الحركة قبل التصفير (تفريغ داخلي — لا يعتمد على pg_dump)
     if payload.archive:
-        backup_dir = _get_backup_dir()
-        archive_path = os.path.join(backup_dir, f"archive-before-reset-{date.today().isoformat()}.sql")
-        env = {**os.environ, "PGPASSWORD": os.environ.get("POSTGRES_PASSWORD", "")}
-        subprocess.run(
-            ["pg_dump", "-h", "db",
-             "-U", os.environ.get("POSTGRES_USER", "bridge_accounting"),
-             "-d", os.environ.get("POSTGRES_DB", "accounting"),
-             "-f", archive_path],
-            capture_output=True, env=env,
-        )
+        try:
+            backup_dir = _get_backup_dir()
+            archive_path = os.path.join(backup_dir, f"archive-before-reset-{date.today().isoformat()}.sql")
+            with open(archive_path, "w", encoding="utf-8") as f:
+                f.write(f"-- Archive before reset {date.today().isoformat()}\n")
+                from app.models.journal import JournalEntry as _JE, MoveLine as _ML
+                for table in (_JE.__table__, _ML.__table__):
+                    rows = db.execute(table.select()).mappings().all()
+                    cols = [c.name for c in table.columns]
+                    for row in rows:
+                        vals = ", ".join(_sql_literal(row[c]) for c in cols)
+                        f.write(f"INSERT INTO {table.name} ({', '.join(cols)}) VALUES ({vals});\n")
+        except Exception:  # noqa: BLE001 — الأرشفة اختيارية ولا تمنع التصفير
+            pass
 
     db.execute(text("DELETE FROM move_lines"))
     db.execute(text("DELETE FROM journal_entries"))
