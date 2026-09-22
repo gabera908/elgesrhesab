@@ -305,6 +305,91 @@ async def list_backups(
     return out
 
 
+def _decrypt_file(src: str, dest: str) -> None:
+    """فك تشفير ملف نسخة احتياطية (عكس _encrypt_file تماماً)."""
+    phrase = settings.backup_encryption_passphrase or "default"
+    with open(src, "rb") as f:
+        blob = f.read()
+    try:
+        r = subprocess.run(
+            ["openssl", "enc", "-d", "-aes-256-cbc", "-pbkdf2",
+             "-in", src, "-out", dest, "-pass", f"pass:{phrase}"],
+            capture_output=True, text=True, timeout=120,
+        )
+        if r.returncode == 0 and os.path.isfile(dest):
+            return
+    except (FileNotFoundError, OSError):
+        pass
+    if blob.startswith(b"XOR1"):
+        import hashlib
+        key = hashlib.pbkdf2_hmac("sha256", phrase.encode(), b"backup-salt", 100_000)
+        masked = blob[4:]
+        with open(dest, "wb") as f:
+            f.write(bytes(b ^ key[i % len(key)] for i, b in enumerate(masked)))
+        return
+    if blob.startswith(b"Salted__"):
+        from cryptography.hazmat.primitives import hashes, padding
+        from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+        from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+        salt, iv, cipher = blob[8:24], blob[24:40], blob[40:]
+        kdf = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32, salt=salt, iterations=100_000)
+        key = kdf.derive(phrase.encode("utf-8"))
+        decryptor = Cipher(algorithms.AES(key), modes.CBC(iv)).decryptor()
+        padded = decryptor.update(cipher) + decryptor.finalize()
+        unpadder = padding.PKCS7(128).unpadder()
+        with open(dest, "wb") as f:
+            f.write(unpadder.update(padded) + unpadder.finalize())
+        return
+    raise ValueError("صيغة الملف غير معروفة أو كلمة المرور خاطئة")
+
+
+def _parse_insert_statements(sql_text: str):
+    """يستخرج جمل INSERT من نص SQL ويجمعها حسب الجدول."""
+    stmts, buf, in_str, depth = [], "", False, 0
+    i = 0
+    while i < len(sql_text):
+        ch = sql_text[i]
+        if in_str:
+            buf += ch
+            if ch == "'":
+                if i + 1 < len(sql_text) and sql_text[i + 1] == "'":
+                    buf += "'"
+                    i += 1
+                else:
+                    in_str = False
+        else:
+            if ch == "'":
+                in_str = True
+                buf += ch
+            elif ch == "(":
+                depth += 1
+                buf += ch
+            elif ch == ")":
+                depth = max(0, depth - 1)
+                buf += ch
+            elif ch == ";":
+                buf += ch
+                if buf.strip().upper().startswith("INSERT"):
+                    stmts.append(buf.strip())
+                buf, depth = "", 0
+            elif ch == "-" and sql_text[i:i + 2] == "--":
+                while i < len(sql_text) and sql_text[i] != "\n":
+                    i += 1
+            else:
+                buf += ch
+        i += 1
+    if buf.strip().upper().startswith("INSERT"):
+        stmts.append(buf.strip())
+    grouped: dict = {}
+    for s in stmts:
+        try:
+            tbl = s.split("INTO", 1)[1].strip().split("(", 1)[0].split()[0].strip('"')
+        except IndexError:
+            continue
+        grouped.setdefault(tbl, []).append(s)
+    return grouped
+
+
 @router.get("/backups/download/{filename}")
 async def download_backup(
     filename: str,
@@ -318,6 +403,105 @@ async def download_backup(
     if not os.path.isfile(path):
         raise HTTPException(status_code=404, detail="الملف غير موجود")
     return FileResponse(path, filename=filename, media_type="application/octet-stream")
+
+
+@router.post("/restore")
+async def restore_backup(
+    confirmation: str = "RESTORE",
+    filename: Optional[str] = None,
+    file: UploadFile | None = File(None),
+    current_user: User = Depends(require_permission("settings", "update")),
+    db: Session = Depends(get_db),
+):
+    """استعادة نسخة: نسخة أمان أولاً ثم مسح الجداول وإعادة الإدخال."""
+    if confirmation != "RESTORE":
+        raise HTTPException(status_code=422, detail="اكتب RESTORE للتأكيد")
+    backup_dir = _get_backup_dir()
+    tmp_upload = None
+    try:
+        if file is not None:
+            if not (file.filename or "").endswith(".enc"):
+                raise HTTPException(status_code=400, detail="الملف يجب أن يكون .enc")
+            tmp_upload = os.path.join(backup_dir, f"upload-{uuid.uuid4().hex}.enc")
+            with open(tmp_upload, "wb") as f:
+                f.write(await file.read())
+            enc_path = tmp_upload
+        elif filename:
+            if "/" in filename or "\\" in filename or ".." in filename:
+                raise HTTPException(status_code=400, detail="اسم ملف غير صالح")
+            enc_path = os.path.join(backup_dir, filename)
+            if not os.path.isfile(enc_path):
+                raise HTTPException(status_code=404, detail="ملف النسخة غير موجود")
+        else:
+            raise HTTPException(status_code=400, detail="اختر نسخة أو ارفع ملف .enc")
+
+        # نسخة أمان تلقائية قبل الاستعادة
+        safe_path = os.path.join(backup_dir, f"pre-restore-{date.today().isoformat()}.sql")
+        try:
+            with open(safe_path, "w", encoding="utf-8") as f:
+                f.write(f"-- Pre-restore safety {date.today().isoformat()}\n")
+                for table in reversed(Base.metadata.sorted_tables):
+                    rows = db.execute(table.select()).mappings().all()
+                    cols = [c.name for c in table.columns]
+                    for row in rows:
+                        vals = ", ".join(_sql_literal(row[c]) for c in cols)
+                        f.write(f"INSERT INTO {table.name} ({', '.join(cols)}) VALUES ({vals});\n")
+            _encrypt_file(safe_path, safe_path + ".enc")
+        except Exception:  # noqa: BLE001
+            pass
+        finally:
+            try:
+                if os.path.exists(safe_path):
+                    os.remove(safe_path)
+            except OSError:
+                pass
+
+        plain_path = os.path.join(backup_dir, f"restore-{uuid.uuid4().hex}.sql")
+        try:
+            _decrypt_file(enc_path, plain_path)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=400, detail=f"فشل فك التشفير: {exc}")
+        try:
+            with open(plain_path, encoding="utf-8") as f:
+                sql_text = f.read()
+        finally:
+            try:
+                os.remove(plain_path)
+            except OSError:
+                pass
+
+        grouped = _parse_insert_statements(sql_text)
+        if not grouped:
+            raise HTTPException(status_code=400, detail="الملف لا يحتوي بيانات صالحة")
+
+        is_pg = not (settings.database_url or "").lower().startswith("sqlite")
+        try:
+            if is_pg:
+                db.execute(text("SET session_replication_role = replica"))
+            for table in reversed(Base.metadata.sorted_tables):
+                db.execute(table.delete())
+            for table in Base.metadata.sorted_tables:
+                for stmt in grouped.get(table.name, []):
+                    db.execute(text(stmt))
+            db.commit()
+        except Exception as exc:  # noqa: BLE001
+            db.rollback()
+            raise HTTPException(status_code=500, detail=f"فشل الاستعادة: {str(exc)[:300]}")
+        finally:
+            try:
+                if is_pg:
+                    db.execute(text("SET session_replication_role = DEFAULT"))
+                    db.commit()
+            except Exception:  # noqa: BLE001
+                pass
+        restored = sum(len(v) for v in grouped.values())
+        return {"message": f"تمت الاستعادة بنجاح ({restored} سجلاً)"}
+    finally:
+        if tmp_upload:
+            try:
+                os.remove(tmp_upload)
+            except OSError:
+                pass
 
 
 # ===== تصفير الحسابات =====

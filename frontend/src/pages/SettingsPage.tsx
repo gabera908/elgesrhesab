@@ -1,6 +1,6 @@
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { Database, Save, AlertTriangle, Download, UserPlus } from "lucide-react";
+import { Database, Save, AlertTriangle, Download, UserPlus, Upload, RotateCcw } from "lucide-react";
 
 import api from "../api/client";
 import { useAuth } from "../contexts/AuthContext";
@@ -17,6 +17,29 @@ interface Role {
   description: string;
 }
 
+interface PermModules {
+  modules: string[];
+  actions: string[];
+}
+
+const MODULE_LABELS: Record<string, string> = {
+  accounts: "الحسابات",
+  journals: "القيود اليومية",
+  partners: "الشركاء",
+  reports: "التقارير",
+  settings: "الإعدادات",
+  users: "المستخدمين",
+};
+
+const ACTION_LABELS: Record<string, string> = {
+  read: "عرض",
+  create: "إنشاء",
+  update: "تعديل",
+  delete: "حذف",
+  post: "ترحيل",
+  cancel: "إلغاء",
+};
+
 export default function SettingsPage() {
   const { user } = useAuth();
   const [companyName, setCompanyName] = useState("الجسر المصري للإعلام والتنمية");
@@ -28,12 +51,22 @@ export default function SettingsPage() {
 
   // إنشاء حساب جديد (بديل التسجيل العام)
   const [roles, setRoles] = useState<Role[]>([]);
+  const [permModules, setPermModules] = useState<PermModules | null>(null);
+  const [showUserForm, setShowUserForm] = useState(false);
   const [newFullName, setNewFullName] = useState("");
   const [newEmail, setNewEmail] = useState("");
   const [newUsername, setNewUsername] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [newRoleId, setNewRoleId] = useState("");
+  const [newPerms, setNewPerms] = useState<Record<string, Record<string, boolean>>>({});
   const [creatingUser, setCreatingUser] = useState(false);
+
+  // استعادة النسخة الاحتياطية
+  const [restoreText, setRestoreText] = useState("");
+  const [restoreFile, setRestoreFile] = useState("");
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [restoring, setRestoring] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const isAuthorized = user?.is_superuser || user?.role === "admin" || user?.role === "accountant";
 
@@ -51,6 +84,12 @@ export default function SettingsPage() {
       const { data } = await api.get("/users-admin/roles");
       setRoles(data);
       if (data.length > 0) setNewRoleId((prev) => prev || data[0].id);
+    } catch {
+      /* تجاهل */
+    }
+    try {
+      const { data } = await api.get("/users-admin/permission-modules");
+      setPermModules(data);
     } catch {
       /* تجاهل */
     }
@@ -108,6 +147,34 @@ export default function SettingsPage() {
     }
   };
 
+  const toggleNewPerm = (module: string, action: string) => {
+    setNewPerms((prev) => {
+      const next = { ...prev };
+      if (!next[module]) next[module] = {};
+      next[module] = { ...next[module], [action]: !next[module][action] };
+      return next;
+    });
+  };
+
+  const newPermsPayload = (): { module: string; action: string }[] => {
+    const list: { module: string; action: string }[] = [];
+    Object.entries(newPerms).forEach(([module, actions]) => {
+      Object.entries(actions).forEach(([action, on]) => {
+        if (on) list.push({ module, action });
+      });
+    });
+    return list;
+  };
+
+  const resetUserForm = () => {
+    setNewFullName("");
+    setNewEmail("");
+    setNewUsername("");
+    setNewPassword("");
+    setNewPerms({});
+    setShowUserForm(false);
+  };
+
   const handleCreateUser = async (e: FormEvent) => {
     e.preventDefault();
     if (!newRoleId) {
@@ -122,18 +189,51 @@ export default function SettingsPage() {
         username: newUsername,
         password: newPassword,
         role_id: newRoleId,
-        permissions: [],
+        permissions: newPermsPayload(),
       });
       toast.success("تم إنشاء الحساب الجديد");
-      setNewFullName("");
-      setNewEmail("");
-      setNewUsername("");
-      setNewPassword("");
+      resetUserForm();
     } catch (err: unknown) {
       const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
       toast.error(detail ?? "فشل إنشاء الحساب");
     } finally {
       setCreatingUser(false);
+    }
+  };
+
+  const handleRestore = async (e: FormEvent) => {
+    e.preventDefault();
+    if (restoreText !== "RESTORE") {
+      toast.error("اكتب RESTORE للتأكيد");
+      return;
+    }
+    if (!restoreFile && !uploadFile) {
+      toast.error("اختر نسخة من القائمة أو ارفع ملف .enc");
+      return;
+    }
+    setRestoring(true);
+    try {
+      let res;
+      if (uploadFile) {
+        const form = new FormData();
+        form.append("file", uploadFile);
+        form.append("confirmation", "RESTORE");
+        res = await api.post("/settings/restore", form, {
+          headers: { "Content-Type": "multipart/form-data" },
+          timeout: 300_000,
+        });
+      } else {
+        res = await api.post(`/settings/restore?confirmation=RESTORE&filename=${encodeURIComponent(restoreFile)}`, null, { timeout: 300_000 });
+      }
+      toast.success(res.data?.message ?? "تمت الاستعادة بنجاح");
+      setRestoreText("");
+      setUploadFile(null);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      toast.error(detail ?? "فشل الاستعادة");
+    } finally {
+      setRestoring(false);
     }
   };
 
@@ -230,12 +330,13 @@ export default function SettingsPage() {
                   <th className="px-3 py-2">الملف</th>
                   <th className="px-3 py-2">التاريخ</th>
                   <th className="px-3 py-2">الحجم</th>
-                  <th className="px-3 py-2"></th>
+                  <th className="px-3 py-2">تحميل</th>
+                  <th className="px-3 py-2">استعادة</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-line-soft">
                 {backups.map((b) => (
-                  <tr key={b.filename}>
+                  <tr key={b.filename} className={restoreFile === b.filename ? "bg-accent-soft/40" : ""}>
                     <td className="px-3 py-2 font-mono" dir="ltr">{b.filename}</td>
                     <td className="px-3 py-2 tabular">{b.modified}</td>
                     <td className="px-3 py-2 tabular">{(b.size / 1024).toFixed(1)} KB</td>
@@ -248,23 +349,93 @@ export default function SettingsPage() {
                         <Download className="w-4 h-4" />
                       </button>
                     </td>
+                    <td className="px-3 py-2">
+                      <button
+                        onClick={() => { setRestoreFile(b.filename); setUploadFile(null); if (fileInputRef.current) fileInputRef.current.value = ""; }}
+                        className={`text-xs px-2.5 py-1 rounded font-medium ${restoreFile === b.filename ? "bg-accent text-white" : "bg-line-soft text-ink hover:bg-accent-soft"}`}
+                      >
+                        {restoreFile === b.filename ? "محددة ✓" : "اختيار"}
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
         )}
+
+        {/* استعادة النسخة الاحتياطية */}
+        <form onSubmit={handleRestore} className="mt-6 pt-5 border-t border-line space-y-4">
+          <div className="flex items-center gap-2">
+            <RotateCcw className="w-5 h-5 text-warning" />
+            <h3 className="font-bold text-ink">استعادة النسخة الاحتياطية</h3>
+          </div>
+          <p className="text-sm text-ink-muted">
+            الاستعادة تمسح البيانات الحالية وتعيد بيانات النسخة (تُحفظ نسخة أمان تلقائية قبلها). اختر نسخة من الجدول أعلاه أو ارفع ملف <span className="font-mono" dir="ltr">.enc</span>.
+          </p>
+          {restoreFile && (
+            <p className="text-sm">النسخة المحددة: <span className="font-mono font-medium" dir="ltr">{restoreFile}</span></p>
+          )}
+          <div>
+            <label className="label" htmlFor="restoreUpload">أو ارفع ملف نسخة (.enc)</label>
+            <input
+              id="restoreUpload"
+              ref={fileInputRef}
+              type="file"
+              accept=".enc"
+              className="input"
+              onChange={(e) => { const f = e.target.files?.[0] ?? null; setUploadFile(f); if (f) setRestoreFile(""); }}
+            />
+            {uploadFile && <p className="text-xs text-ink-muted mt-1" dir="ltr">{uploadFile.name}</p>}
+          </div>
+          <div>
+            <label className="label" htmlFor="restoreConfirm">
+              اكتب <span className="font-mono font-bold text-danger" dir="ltr">RESTORE</span> للتأكيد
+            </label>
+            <input
+              id="restoreConfirm"
+              className="input font-mono"
+              value={restoreText}
+              onChange={(e) => setRestoreText(e.target.value)}
+              dir="ltr"
+              placeholder="RESTORE"
+            />
+          </div>
+          <div className="flex gap-2">
+            <button type="submit" className="btn-secondary" disabled={restoring || restoreText !== "RESTORE" || (!restoreFile && !uploadFile)}>
+              <Upload className="w-4 h-4" />
+              {restoring ? "جاري الاستعادة..." : "استعادة النسخة"}
+            </button>
+            {(restoreFile || uploadFile) && (
+              <button type="button" className="btn-secondary" onClick={() => { setRestoreFile(""); setUploadFile(null); if (fileInputRef.current) fileInputRef.current.value = ""; }}>
+                إلغاء الاختيار
+              </button>
+            )}
+          </div>
+        </form>
       </div>
 
       {/* إنشاء حساب جديد */}
-      <form onSubmit={handleCreateUser} className="card p-6 space-y-4">
-        <div className="flex items-center gap-2">
-          <UserPlus className="w-5 h-5 text-accent-dark" />
-          <h2 className="font-bold text-ink">إنشاء حساب جديد</h2>
+      <div className="card p-6 space-y-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <UserPlus className="w-5 h-5 text-accent-dark" />
+            <h2 className="font-bold text-ink">إنشاء حساب جديد</h2>
+          </div>
+          <button
+            type="button"
+            className={showUserForm ? "btn-secondary" : "btn-primary"}
+            onClick={() => setShowUserForm((v) => !v)}
+          >
+            <UserPlus className="w-4 h-4" />
+            {showUserForm ? "إخفاء النموذج" : "أضف يوزر جديد"}
+          </button>
         </div>
         <p className="text-sm text-ink-muted">
-          إنشاء حساب مستخدم من داخل الإعدادات (بدل التسجيل من شاشة الدخول).
+          إنشاء حساب مستخدم من داخل الإعدادات (بدل التسجيل من شاشة الدخول) مع صلاحيات فردية اختيارية.
         </p>
+        {showUserForm && (
+        <form onSubmit={handleCreateUser} className="space-y-4 pt-2">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
             <label className="label" htmlFor="newFullName">الاسم الكامل</label>
@@ -297,11 +468,50 @@ export default function SettingsPage() {
             </select>
           </div>
         </div>
-        <button type="submit" className="btn-primary" disabled={creatingUser}>
-          <UserPlus className="w-4 h-4" />
-          {creatingUser ? "جاري الإنشاء..." : "إنشاء الحساب"}
-        </button>
-      </form>
+        {permModules && (
+          <div>
+            <p className="label">الصلاحيات الفردية (اختيارية — تُضاف فوق صلاحيات الدور)</p>
+            <div className="overflow-x-auto border border-line rounded-lg">
+              <table className="w-full text-sm">
+                <thead className="bg-line-soft border-b border-line">
+                  <tr className="text-right text-xs text-ink-muted">
+                    <th className="px-3 py-2">الوحدة</th>
+                    {permModules.actions.map((a) => (
+                      <th key={a} className="px-3 py-2 text-center">{ACTION_LABELS[a] ?? a}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-line-soft">
+                  {permModules.modules.map((m) => (
+                    <tr key={m}>
+                      <td className="px-3 py-2 font-medium">{MODULE_LABELS[m] ?? m}</td>
+                      {permModules.actions.map((a) => (
+                        <td key={a} className="px-3 py-2 text-center">
+                          <input
+                            type="checkbox"
+                            className="w-4 h-4 accent-[var(--accent)]"
+                            checked={Boolean(newPerms[m]?.[a])}
+                            onChange={() => toggleNewPerm(m, a)}
+                          />
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+        <div className="flex gap-2">
+          <button type="submit" className="btn-primary" disabled={creatingUser}>
+            <UserPlus className="w-4 h-4" />
+            {creatingUser ? "جاري الإنشاء..." : "إنشاء الحساب"}
+          </button>
+          <button type="button" className="btn-secondary" onClick={resetUserForm}>إلغاء</button>
+        </div>
+        </form>
+        )}
+      </div>
 
       {/* تصفير الحسابات */}
       <form onSubmit={handleReset} className="card p-6 space-y-4 border-danger/30">
