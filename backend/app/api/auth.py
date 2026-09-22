@@ -80,7 +80,13 @@ class Enable2FARequest(BaseModel):
 
 @router.post("/register", status_code=status.HTTP_201_CREATED)
 async def register(payload: RegisterRequest, db: Session = Depends(get_db)):
-    """تسجيل مستخدم جديد — يتطلب كلمة مرور قوية، ولا يسمح بالتكرار."""
+    """تسجيل مستخدم جديد — متاح فقط لأول مستخدم (التأسيس).
+
+    بعد وجود أي مستخدم، يُدار إنشاء الحسابات من لوحة الإعدادات
+    عبر /api/users-admin/users بصلاحية settings:update.
+    """
+    if db.scalar(select(User).limit(1)) is not None:
+        raise HTTPException(status_code=403, detail="التسجيل العام مغلق — أنشئ الحساب من الإعدادات")
     strong, msg = is_password_strong(payload.password)
     if not strong:
         raise HTTPException(status_code=422, detail=msg)

@@ -1,5 +1,5 @@
 import { FormEvent, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { Loader2 } from "lucide-react";
 
@@ -99,13 +99,6 @@ export default function LoginPage() {
             {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
             {loading ? "جاري التحقق..." : "تسجيل الدخول"}
           </button>
-
-          <p className="text-sm text-center text-ink-muted">
-            ليس لديك حساب؟{" "}
-            <Link to="/register" className="text-accent font-medium hover:underline">
-              إنشاء حساب
-            </Link>
-          </p>
         </form>
       </div>
     </div>

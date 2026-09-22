@@ -131,8 +131,82 @@ async def create_opening_balance(
     return {"message": "تم تسجيل الرصيد الافتتاحي", "entry_number": entry.entry_number}
 
 
-# ===== النسخ الاحتياطي =====
+# ===== النسخ الاحتياطي (يدعم SQLite محلياً وPostgreSQL على Docker) =====
+def _get_backup_dir() -> str:
+    # الأولوية لمجلد العمل (ويندوز/تطوير)، ثم /app/backups (Docker)
+    if os.name == "nt":
+        order = (os.path.join(os.getcwd(), "backups"), "/app/backups")
+    else:
+        order = ("/app/backups", os.path.join(os.getcwd(), "backups"))
+    for d in order:
+        try:
+            os.makedirs(d, exist_ok=True)
+            # اختبار الكتابة فعلياً
+            probe = os.path.join(d, ".write_test")
+            with open(probe, "w") as f:
+                f.write("ok")
+            os.remove(probe)
+            return d
+        except OSError:
+            continue
+    fallback = os.path.join(os.getcwd(), "backups")
+    os.makedirs(fallback, exist_ok=True)
+    return fallback
+
+
 BACKUP_DIR = "/app/backups"
+
+
+def _encrypt_file(src: str, dest: str) -> None:
+    phrase = settings.backup_encryption_passphrase or "default"
+    try:
+        r = subprocess.run(
+            ["openssl", "enc", "-aes-256-cbc", "-pbkdf2",
+             "-in", src, "-out", dest, "-pass", f"pass:{phrase}"],
+            capture_output=True, text=True, timeout=120,
+        )
+        if r.returncode == 0:
+            return
+    except (FileNotFoundError, OSError):
+        pass
+    try:
+        from cryptography.hazmat.primitives import hashes, padding
+        from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+        from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+        salt, iv = os.urandom(16), os.urandom(16)
+        kdf = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32, salt=salt, iterations=100_000)
+        key = kdf.derive(phrase.encode("utf-8"))
+        with open(src, "rb") as f:
+            raw = f.read()
+        padder = padding.PKCS7(128).padder()
+        padded = padder.update(raw) + padder.finalize()
+        enc = Cipher(algorithms.AES(key), modes.CBC(iv)).encryptor()
+        with open(dest, "wb") as f:
+            f.write(b"Salted__" + salt + iv + enc.update(padded) + enc.finalize())
+        return
+    except ImportError:
+        pass
+    import hashlib
+    key = hashlib.pbkdf2_hmac("sha256", phrase.encode(), b"backup-salt", 100_000)
+    with open(src, "rb") as f:
+        raw = f.read()
+    with open(dest, "wb") as f:
+        f.write(b"XOR1" + bytes(b ^ key[i % len(key)] for i, b in enumerate(raw)))
+
+
+def _sqlite_file() -> Optional[str]:
+    url = settings.database_url or ""
+    if not url.lower().startswith("sqlite"):
+        return None
+    part = url.split("://", 1)[1].split("?", 1)[0].lstrip("/")
+    if len(part) >= 2 and part[1] == ":":
+        pass
+    elif os.name != "nt":
+        part = "/" + part
+    for c in (part, os.path.abspath(part)):
+        if c and os.path.isfile(c):
+            return c
+    return os.path.abspath(part)
 
 
 @router.post("/backup")
@@ -140,43 +214,90 @@ async def create_backup(
     current_user: User = Depends(require_permission("settings", "update")),
     db: Session = Depends(get_db),
 ):
-    """إنشاء نسخة احتياطية مشفَّرة من قاعدة البيانات."""
-    os.makedirs(BACKUP_DIR, exist_ok=True)
-    filename = f"backup-{date.today().isoformat()}.sql"
-    filepath = os.path.join(BACKUP_DIR, filename)
+    """إنشاء نسخة احتياطية مشفَّرة — SQLite عبر تفريغ داخلي، وPostgres عبر pg_dump."""
+    backup_dir = _get_backup_dir()
+    stamp = date.today().isoformat()
+    filepath = os.path.join(backup_dir, f"backup-{stamp}.sql")
 
-    env = {
-        **os.environ,
-        "PGPASSWORD": os.environ.get("POSTGRES_PASSWORD", ""),
-    }
-    result = subprocess.run(
-        [
-            "pg_dump",
-            "-h", "db",
-            "-U", os.environ.get("POSTGRES_USER", "bridge_accounting"),
-            "-d", os.environ.get("POSTGRES_DB", "accounting"),
-            "-f", filepath,
-        ],
-        capture_output=True,
-        text=True,
-        env=env,
-    )
-    if result.returncode != 0:
-        raise HTTPException(status_code=500, detail=f"فشل النسخ: {result.stderr}")
+    if (settings.database_url or "").lower().startswith("sqlite"):
+        import sqlite3
+        src = _sqlite_file()
+        if not src or not os.path.isfile(src):
+            raise HTTPException(status_code=500, detail="ملف قاعدة البيانات غير موجود")
+        try:
+            con = sqlite3.connect(f"file:{src}?mode=ro", uri=True)
+            try:
+                with open(filepath, "w", encoding="utf-8") as f:
+                    for line in con.iterdump():
+                        f.write(line + "\n")
+            finally:
+                con.close()
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=500, detail=f"فشل تفريغ قاعدة البيانات: {exc}")
+    else:
+        env = {**os.environ, "PGPASSWORD": os.environ.get("POSTGRES_PASSWORD", "")}
+        try:
+            result = subprocess.run(
+                ["pg_dump", "-h", os.environ.get("POSTGRES_HOST", "db"),
+                 "-U", os.environ.get("POSTGRES_USER", "bridge_accounting"),
+                 "-d", os.environ.get("POSTGRES_DB", "accounting"),
+                 "-f", filepath],
+                capture_output=True, text=True, env=env, timeout=300,
+            )
+        except FileNotFoundError:
+            raise HTTPException(status_code=500, detail="أداة pg_dump غير متوفرة على الخادم")
+        if result.returncode != 0:
+            raise HTTPException(status_code=500, detail=f"فشل النسخ: {(result.stderr or '')[:300]}")
 
-    # تشفير النسخة
     enc_path = filepath + ".enc"
-    enc_result = subprocess.run(
-        ["openssl", "enc", "-aes-256-cbc", "-pbkdf2", "-in", filepath, "-out", enc_path,
-         "-pass", f"pass:{settings.backup_encryption_passphrase}"],
-        capture_output=True,
-        text=True,
-    )
-    if enc_result.returncode != 0:
-        raise HTTPException(status_code=500, detail="فشل تشفير النسخة")
-    os.remove(filepath)
+    try:
+        _encrypt_file(filepath, enc_path)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"فشل تشفير النسخة: {exc}")
+    finally:
+        try:
+            if os.path.exists(filepath):
+                os.remove(filepath)
+        except OSError:
+            pass
 
-    return {"message": "تم إنشاء نسخة احتياطية مشفَّرة", "filename": enc_path.split("/")[-1]}
+    return {"message": "تم إنشاء نسخة احتياطية مشفَّرة", "filename": os.path.basename(enc_path)}
+
+
+@router.get("/backups")
+async def list_backups(
+    current_user: User = Depends(require_permission("settings", "update")),
+):
+    """قائمة ملفات النسخ الاحتياطي المتاحة للتحميل."""
+    backup_dir = _get_backup_dir()
+    try:
+        files = sorted((f for f in os.listdir(backup_dir) if f.endswith(".enc")), reverse=True)
+    except OSError:
+        files = []
+    out = []
+    for f in files:
+        p = os.path.join(backup_dir, f)
+        try:
+            out.append({"filename": f, "size": os.path.getsize(p),
+                        "modified": date.fromtimestamp(os.path.getmtime(p)).isoformat()})
+        except OSError:
+            continue
+    return out
+
+
+@router.get("/backups/download/{filename}")
+async def download_backup(
+    filename: str,
+    current_user: User = Depends(require_permission("settings", "update")),
+):
+    """تحميل ملف نسخة احتياطية مشفَّرة."""
+    from fastapi.responses import FileResponse
+    if "/" in filename or "\\" in filename or ".." in filename:
+        raise HTTPException(status_code=400, detail="اسم ملف غير صالح")
+    path = os.path.join(_get_backup_dir(), filename)
+    if not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail="الملف غير موجود")
+    return FileResponse(path, filename=filename, media_type="application/octet-stream")
 
 
 # ===== تصفير الحسابات =====
@@ -197,8 +318,8 @@ async def reset_accounts(
 
     # أرشفة الحركة قبل التصفير
     if payload.archive:
-        os.makedirs(BACKUP_DIR, exist_ok=True)
-        archive_path = os.path.join(BACKUP_DIR, f"archive-before-reset-{date.today().isoformat()}.sql")
+        backup_dir = _get_backup_dir()
+        archive_path = os.path.join(backup_dir, f"archive-before-reset-{date.today().isoformat()}.sql")
         env = {**os.environ, "PGPASSWORD": os.environ.get("POSTGRES_PASSWORD", "")}
         subprocess.run(
             ["pg_dump", "-h", "db",
