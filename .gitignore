@@ -26,6 +26,12 @@ dist/
 *.local
 *.tsbuildinfo
 
+# Playwright (E2E)
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/
+
 # Database & backups
 *.db
 *.sql

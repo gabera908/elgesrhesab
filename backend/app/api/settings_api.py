@@ -258,7 +258,7 @@ async def create_backup(
         # PostgreSQL: تفريغ بايثون خالص عبر SQLAlchemy — لا يحتاج pg_dump
         try:
             with open(filepath, "w", encoding="utf-8") as f:
-                f.write(f"-- Backup {stamp}\n")
+                f.write(f"-- Backup {stamp}\n-- generator: settings_api pure-python dump v1\n")
                 for table in reversed(Base.metadata.sorted_tables):
                     rows = db.execute(table.select()).mappings().all()
                     cols = [c.name for c in table.columns]
@@ -471,10 +471,36 @@ async def restore_backup(
                 pass
 
         grouped = _parse_insert_statements(sql_text)
-        if not grouped:
+        is_sqlite_dump = "CREATE TABLE" in sql_text.upper() and "generator: settings_api" not in sql_text
+        if not grouped and not is_sqlite_dump:
             raise HTTPException(status_code=400, detail="الملف لا يحتوي بيانات صالحة")
 
         is_pg = not (settings.database_url or "").lower().startswith("sqlite")
+        if is_sqlite_dump:
+            # تفريغ sqlite3 الخام يُستعاد عبر تنفيذه مباشرة (جداول فارغة تُنشأ ضمنياً)
+            try:
+                if is_pg:
+                    db.execute(text("SET session_replication_role = replica"))
+                for table in reversed(Base.metadata.sorted_tables):
+                    db.execute(table.delete())
+                for stmt in (s.strip() for s in sql_text.split(";")):
+                    su = stmt.strip().upper()
+                    if su.startswith("INSERT"):
+                        db.execute(text(stmt))
+                db.commit()
+            except Exception as exc:  # noqa: BLE001
+                db.rollback()
+                raise HTTPException(status_code=500, detail=f"فشل الاستعادة: {str(exc)[:300]}")
+            finally:
+                try:
+                    if is_pg:
+                        db.execute(text("SET session_replication_role = DEFAULT"))
+                        db.commit()
+                except Exception:  # noqa: BLE001
+                    pass
+            restored = sql_text.upper().count("INSERT INTO")
+            return {"message": f"تمت الاستعادة بنجاح ({restored} سجلاً)"}
+
         try:
             if is_pg:
                 db.execute(text("SET session_replication_role = replica"))
